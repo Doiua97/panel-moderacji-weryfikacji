@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.18
+// @version      3.3.19
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-    window[RUNTIME_GUARD] = "3.3.18";
+    window[RUNTIME_GUARD] = "3.3.19";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -48,8 +48,7 @@
     "Atakuj", "Handluj", "Pocałuj", "Wyślij wiadomość", "Pokaż ekwipunek",
     "Zaproś do przyjaciół", "Zaproś do drużyny", "Pokaż profil", "Nawiguj",
     "Złość się", "Zmień strój",
-    "Rozpocznij weryfikację", "Dodaj do aktywnej weryfikacji",
-    "Rozpocznij weryfikację (test)", "Dodaj do aktywnej weryfikacji (test)"
+    "Rozpocznij weryfikację", "Dodaj do aktywnej weryfikacji"
   ]);
   const DEFAULT_START_CONFIG = {
     local: "",
@@ -2089,17 +2088,12 @@
       const menu = findMenu(attack);
       if (menu) enhanceMenu(menu, attack);
     }
-    for (const profile of exactTextElements("Pokaż profil")) {
-      const menu = findOwnCharacterMenu(profile);
-      if (menu) enhanceOwnCharacterMenu(menu, profile);
-    }
   }
 
   function resetEnhancedMenus() {
-    document.querySelectorAll("[data-mc-menu-enhanced='1'],[data-mc-self-menu-enhanced='1']").forEach(menu => {
+    document.querySelectorAll("[data-mc-menu-enhanced='1']").forEach(menu => {
       menu.querySelectorAll("[data-mc-action]").forEach(item => item.remove());
       delete menu.dataset.mcMenuEnhanced;
-      delete menu.dataset.mcSelfMenuEnhanced;
     });
   }
 
@@ -2113,34 +2107,6 @@
     item.removeAttribute("id");
     item.dataset.mcAction = hasActiveVerification ? "add" : "start";
     item.textContent = hasActiveVerification ? "Dodaj do aktywnej weryfikacji" : "Rozpocznij weryfikację";
-    item.setAttribute("role", "button");
-    item.setAttribute("tabindex", "0");
-    item.addEventListener("click", event => {
-      event.preventDefault();
-      event.stopPropagation();
-      hasActiveVerification ? addParticipant(player) : startVerification(player);
-    });
-    item.addEventListener("keydown", event => {
-      if (event.key === "Enter" || event.key === " ") item.click();
-    });
-    menu.appendChild(item);
-  }
-
-  function enhanceOwnCharacterMenu(menu, styleSource) {
-    if (menu.dataset.mcSelfMenuEnhanced === "1") return;
-    menu.dataset.mcSelfMenuEnhanced = "1";
-    const player = {
-      nick: getCurrentCharacterNick(),
-      id: getCurrentCharacterId()
-    };
-    if (!player.nick) return;
-    const hasActiveVerification = state.active?.verification?.status === "ACTIVE";
-    const item = styleSource.cloneNode(false);
-    item.removeAttribute("id");
-    item.dataset.mcAction = hasActiveVerification ? "add-test" : "start-test";
-    item.textContent = hasActiveVerification
-      ? "Dodaj do aktywnej weryfikacji (test)"
-      : "Rozpocznij weryfikację (test)";
     item.setAttribute("role", "button");
     item.setAttribute("tabindex", "0");
     item.addEventListener("click", event => {
@@ -2200,22 +2166,6 @@
       const text = normalize(element.innerText);
       const rect = element.getBoundingClientRect();
       if (REQUIRED_ACTIONS.every(label => text.includes(label)) && rect.width >= 90 && rect.width <= 440 && rect.height <= 900) return element;
-    }
-    return null;
-  }
-
-  function findOwnCharacterMenu(start) {
-    for (let element = start.parentElement, depth = 0; element && depth < 8; element = element.parentElement, depth++) {
-      const text = normalize(element.innerText);
-      const rect = element.getBoundingClientRect();
-      if (
-        text.includes("Zmień strój") &&
-        text.includes("Pokaż profil") &&
-        !text.includes("Atakuj") &&
-        rect.width >= 90 &&
-        rect.width <= 440 &&
-        rect.height <= 900
-      ) return element;
     }
     return null;
   }
