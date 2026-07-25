@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
-// @namespace    doiua97.github.io/panel-moderacji
-// @version      3.0.0
+// @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
+// @version      3.3.0
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -15,9 +15,12 @@
 // @exclude      https://margonem.com/*
 // @exclude      https://www.margonem.com/*
 // @run-at       document-idle
-// @grant        none
-// @downloadURL  https://doiua97.github.io/panel-moderacji/panel-moderacji-weryfikacja.user.js
-// @updateURL    https://doiua97.github.io/panel-moderacji/panel-moderacji-weryfikacja.user.js
+// @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
+// @connect      www.margonem.pl
+// @connect      www.margonem.com
+// @downloadURL  https://github.com/Doiua97/panel-moderacji-weryfikacji/blob/main/panel-moderacji-weryfikacja.user.js
+// @updateURL    https://github.com/Doiua97/panel-moderacji-weryfikacji/blob/main/panel-moderacji-weryfikacja.user.js
 // ==/UserScript==
 
 (() => {
@@ -25,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.0.0";
+  window[RUNTIME_GUARD] = "3.3.0";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -50,23 +53,11 @@
   const DEFAULT_START_CONFIG = {
     local: "{moderator} rozpoczyna weryfikację gracza {nick}. Proszę o pozostanie w grze i stosowanie się do poleceń moderatora.",
     console: ".reminder \"{nick}\" \"Rozpoczynam weryfikację. Pozostań w miejscu i wykonuj polecenia. Kod: {kod}.\"",
+    sendCode: ".reminder \"{nick}\" \"Polecenie weryfikacyjne: prześlij wiadomość z kodem {kod}\"",
     finish: "Weryfikacja gracza {nick} została zakończona."
   };
-  const DEFAULT_READY_COMMANDS = [
-    { id: "finish", label: "KONIEC", channel: "LOCAL", content: "Weryfikacja gracza {nick} została zakończona." },
-    { id: "code", label: "KOD", channel: "CONSOLE", content: ".reminder \"{nick}\" \"Polecenie weryfikacyjne: prześlij wiadomość z kodem {kod}.\"" },
-    { id: "nick", label: "NICK", channel: "CONSOLE", content: ".reminder \"{nick}\" \"Polecenie weryfikacyjne: prześlij swój nick.\"" },
-    { id: "screen", label: "SCREEN", channel: "CONSOLE", content: ".reminder \"{nick}\" \"Polecenie weryfikacyjne: prześlij zrzut całego ekranu.\"" },
-    { id: "mobs", label: "ZAATAKOWANIE MOBÓW", channel: "CONSOLE", content: ".reminder \"{nick}\" \"Polecenie weryfikacyjne: zaatakuj najbliższego potwora.\"" },
-    { id: "trade", label: "HANDEL", channel: "CONSOLE", content: ".reminder \"{nick}\" \"Polecenie weryfikacyjne: odejdź i rozpocznij handel ze wskazanym graczem.\"" },
-    { id: "approach", label: "PODEJŚCIE DO WERYFIKUJĄCEGO", channel: "CONSOLE", content: ".reminder \"{nick}\" \"Polecenie weryfikacyjne: podejdź do postaci {moderator}.\"" }
-  ];
-  const RESULT_LABELS = {
-    POSITIVE: "wynikiem pozytywnym",
-    NEGATIVE: "wynikiem negatywnym",
-    UNRESOLVED: "bez rozstrzygnięcia"
-  };
-
+  const DEFAULT_READY_COMMANDS = [];
+  const LEGACY_READY_COMMAND_IDS = new Set(["finish", "code", "nick", "screen", "mobs", "trade", "approach"]);
   const state = {
     selected: { nick: "", id: "" },
     active: null,
@@ -114,7 +105,7 @@
 
   function emptyLocalDatabase() {
     return {
-      version: 1,
+      version: 2,
       nextVerificationId: 1,
       nextParticipantId: 1,
       nextEventId: 1,
@@ -126,11 +117,22 @@
     try {
       const parsed = JSON.parse(localStorage.getItem(LOCAL_DATABASE_KEY) || "null");
       if (!parsed || !Array.isArray(parsed.verifications)) return emptyLocalDatabase();
-      return {
+      const database = {
         ...emptyLocalDatabase(),
         ...parsed,
         verifications: parsed.verifications
       };
+      database.version = 2;
+      for (const record of database.verifications) {
+        const verification = record?.verification || {};
+        for (const participant of record?.participants || []) {
+          participant.started_at ||= participant.joined_at || verification.started_at || verification.created_at;
+          participant.verification_code ||= verification.verification_code || "";
+          participant.start_map_id ??= participant.last_map_id ?? verification.start_map_id ?? null;
+          participant.start_map_name ||= participant.last_map_name || verification.start_map_name || null;
+        }
+      }
+      return database;
     } catch {
       return emptyLocalDatabase();
     }
@@ -233,7 +235,6 @@
         source: data.source || "OWN_INITIATIVE",
         verification_code: data.code || "",
         status: "ACTIVE",
-        result: null,
         started_at: now,
         ended_at: null,
         created_at: now,
@@ -244,8 +245,11 @@
         character_name: data.targetCharacter,
         character_id: data.targetCharacterId || null,
         joined_at: now,
+        started_at: now,
+        verification_code: data.code || "",
+        start_map_id: data.startMapId || null,
+        start_map_name: data.startMapName || null,
         resolved_at: null,
-        result: null,
         presence_status: "PRESENT",
         last_map_id: data.startMapId || null,
         last_map_name: data.startMapName || null,
@@ -523,10 +527,11 @@
 
         <div class="mc-selected">Wybrany gracz: <strong data-selected>nie rozpoznano</strong></div>
         <div class="mc-search">
-          <input data-search placeholder="Wpisz nick gracza i naciśnij Enter">
+          <input data-search placeholder="Wpisz nick, ID konta lub link profilu">
           <button type="button" data-select-player>Wybierz gracza</button>
           <button type="button" data-clear-player>Wyczyść</button>
         </div>
+        <div class="mc-search-results" data-search-results></div>
         <p class="mc-note">Tryb interfejsu. Serwer gry nadal sprawdza uprawnienia do każdego polecenia konsoli.</p>
 
         <div class="mc-command-fields">
@@ -547,8 +552,8 @@
               <button data-command="reminder">Wyślij upomnienie</button>
               <button data-command="mute">Nałóż wyciszenie</button>
               <button data-command="unmute">Zdejmij wyciszenie</button>
-              <button class="danger" data-command="kill">Czasowo zabij postać</button>
-              <button class="danger" data-command="unkill">Zdejmij zabicie</button>
+              <button class="danger" data-command="kill">Kill</button>
+              <button class="danger" data-command="unkill">Unkill</button>
             </div>
           </section>
           <section class="mc-box" data-command-section="location" hidden>
@@ -571,29 +576,20 @@
         </details>
 
         <details class="mc-block">
-          <summary>Kara konta po ID <b>AKTUALNY ŚWIAT</b></summary>
-          <p>Wklej ID konta lub pełny link do profilu. Wersja lokalna pokaże postacie z bieżącej mapy, dla których klient udostępnia to ID konta (${escapeMarkup(currentWorldName())}).</p>
-          <div class="mc-account-search">
-            <input data-account-id placeholder="ID lub link, np. 8863242">
-            <input data-account-time placeholder="Czas kary, np. 12h">
-            <button type="button" data-detect-characters>Wykryj postacie</button>
-          </div>
-          <div data-account-characters></div>
-        </details>
-
-        <details class="mc-block">
           <summary>Rozpoczęcie i zakończenie weryfikacji <b>ZAPIS LOKALNY</b></summary>
           <p>Pierwsza wiadomość trafia na czat lokalny, a następnie polecenie do konsoli. Sesję rozpoczynasz przez PPM na graczu.</p>
           <label>Wiadomość lokalna<textarea data-start-local>${escapeMarkup(start.local)}</textarea></label>
           <label>Komenda konsoli<textarea data-start-console>${escapeMarkup(start.console)}</textarea></label>
+          <label>Polecenie „Wyślij kod”<textarea data-send-code-command>${escapeMarkup(start.sendCode)}</textarea></label>
+          <p>W poleceniu „Wyślij kod” użyj <code>{nick}</code> oraz <code>{kod}</code>. Kod zostanie zastąpiony osobnym kodem wybranego uczestnika.</p>
           <label>Wiadomość kończąca na czat lokalny<textarea data-finish-local>${escapeMarkup(start.finish)}</textarea></label>
-          <p>W wiadomości kończącej możesz użyć: <code>{nick}</code>, <code>{moderator}</code> oraz <code>{wynik}</code>.</p>
+          <p>W wiadomości kończącej możesz użyć: <code>{nick}</code> oraz <code>{moderator}</code>.</p>
           <button type="button" data-save-start>Zapisz</button>
         </details>
 
         <details class="mc-block" open>
           <summary>Gotowe polecenia <b>MENU POD PPM</b></summary>
-          <p>Zmienne: <code>{nick}</code>, <code>{moderator}</code>, <code>{czas}</code>, <code>{powod}</code>/<code>{powód}</code>, <code>{kod}</code>, <code>{tresc}</code>/<code>{treść}</code>, <code>{wynik}</code>.</p>
+          <p>Zmienne: <code>{nick}</code>, <code>{moderator}</code>, <code>{czas}</code>, <code>{powod}</code>/<code>{powód}</code>, <code>{kod}</code>, <code>{tresc}</code>/<code>{treść}</code>.</p>
           <div class="mc-ready-editor">
             <input data-ready-label placeholder="Nazwa polecenia">
             <select data-ready-channel><option value="CONSOLE">Konsola</option><option value="LOCAL">Czat lokalny</option></select>
@@ -627,6 +623,11 @@
     });
     overlay.querySelector("[data-clear-player]").addEventListener("click", () => {
       state.selected = { nick: "", id: "" };
+      state.accountCharacters = [];
+      const input = overlay.querySelector("[data-search]");
+      const results = overlay.querySelector("[data-search-results]");
+      if (input) input.value = "";
+      if (results) results.innerHTML = "";
       renderSelected();
     });
     overlay.querySelector("[data-random-code]").addEventListener("click", randomizeVerificationCode);
@@ -650,40 +651,44 @@
       const config = {
         local: overlay.querySelector("[data-start-local]").value.trim(),
         console: overlay.querySelector("[data-start-console]").value.trim(),
+        sendCode: overlay.querySelector("[data-send-code-command]").value.trim() || DEFAULT_START_CONFIG.sendCode,
         finish: overlay.querySelector("[data-finish-local]").value.trim() || DEFAULT_START_CONFIG.finish
       };
       localStorage.setItem(START_CONFIG_KEY, JSON.stringify(config));
       notice("Zapisano treści rozpoczęcia i zakończenia weryfikacji.");
     });
-    overlay.querySelector("[data-detect-characters]").addEventListener("click", detectAccountCharacters);
     overlay.querySelector("[data-ready-save]").addEventListener("click", saveReadyCommand);
     overlay.querySelector("[data-ready-cancel]").addEventListener("click", resetReadyEditor);
   }
 
-  function selectFromSearch() {
+  async function selectFromSearch() {
     const input = state.panel?.querySelector("[data-search]");
-    const nick = normalize(input?.value);
-    if (!nick) return notice("Wpisz nick gracza.");
-    state.selected = { nick, id: resolvePlayerId(nick) || "" };
+    const value = normalize(input?.value);
+    if (!value) return notice("Wpisz nick, ID konta lub link profilu.");
+    const accountId = profileAccountId(value);
+    if (accountId) {
+      await detectAccountCharacters(accountId);
+      return;
+    }
+    state.selected = { nick: value, id: resolvePlayerId(value) || "" };
     renderSelected();
   }
 
   function renderSelected() {
     if (!state.panel) return;
     state.panel.querySelector("[data-selected]").textContent = state.selected.nick || "nie rozpoznano";
-    const input = state.panel.querySelector("[data-search]");
-    if (input && state.selected.nick) input.value = state.selected.nick;
   }
 
   function panelValues() {
+    const selectedParticipant = findParticipant(state.selected.nick);
     return {
       nick: state.selected.nick,
       moderator: getCurrentCharacterNick(),
       czas: normalize(state.panel?.querySelector("[data-time]")?.value),
       powod: normalize(state.panel?.querySelector("[data-reason]")?.value),
       tresc: normalize(state.panel?.querySelector("[data-reason]")?.value),
-      wynik: "",
       kod: normalize(state.panel?.querySelector("[data-code]")?.value)
+        || normalize(selectedParticipant?.verification_code)
         || normalize(state.active?.verification?.verification_code)
     };
   }
@@ -697,31 +702,41 @@
       notice(`Wylosowano kod roboczy ${code}. Rozpoczęcie weryfikacji przez PPM utworzy nowy kod sesji.`);
       return;
     }
+    const participant = findParticipant(state.selected.nick);
+    if (!participant || participant.resolved_at) {
+      notice("Wybierz aktywnego uczestnika, któremu chcesz przypisać kod.");
+      return;
+    }
     const map = currentMap();
     state.active = mutateLocalVerification(verification.id, (record, database) => {
-      record.verification.verification_code = code;
+      const stored = (record.participants || []).find(item => String(item.id) === String(participant.id));
+      if (!stored || stored.resolved_at) throw new Error("PARTICIPANT_NOT_ACTIVE");
+      stored.verification_code = code;
+      stored.code_updated_at = new Date().toISOString();
       record.verification.updated_at = new Date().toISOString();
       addLocalEvent(database, record, {
-        title: "Wylosowano nowy kod weryfikacyjny",
+        title: `Wylosowano nowy kod dla ${stored.character_name}`,
         eventType: "CODE_GENERATED",
-        details: { code, moderator: getCurrentCharacterNick() },
+        details: { code, moderator: getCurrentCharacterNick(), characterName: stored.character_name },
         mapId: map.id,
-        mapName: map.name
+        mapName: map.name,
+        participantId: stored.id
       });
     });
     renderActiveSections();
-    notice(`Nowy kod aktywnej weryfikacji: ${code}.`);
+    notice(`Nowy kod gracza ${participant.character_name}: ${code}.`);
   }
 
   function resolveTemplate(content, additions = {}) {
     const values = { ...panelValues(), ...additions };
     const missing = [];
-    const resolved = String(content || "").replace(/\{(nick|moderator|czas|powod|powód|kod|tresc|treść|wynik)\}/gi, (_, raw) => {
+    const resolved = String(content || "")
+      .replace(/\{(nick|moderator|czas|powod|powód|kod|tresc|treść)\}/gi, (_, raw) => {
       const key = raw.toLocaleLowerCase("pl").replace("powód", "powod").replace("treść", "tresc");
       const value = normalize(values[key]);
       if (!value) missing.push(`{${raw}}`);
       return value;
-    });
+      });
     return { content: resolved, missing: [...new Set(missing)] };
   }
 
@@ -780,15 +795,129 @@
     await recordCommand(label, command, "CONSOLE", values.nick);
   }
 
-  async function detectAccountCharacters() {
-    const input = state.panel?.querySelector("[data-account-id]");
-    const id = String(input?.value || "").match(/\d{3,12}/)?.[0];
-    if (!id) return notice("Podaj prawidłowe ID konta lub link profilu.");
-    const target = state.panel.querySelector("[data-account-characters]");
+  function profileAccountId(value) {
+    const text = String(value || "").trim();
+    const profileMatch = text.match(/profile\/view,(\d{3,12})/i);
+    if (profileMatch) return profileMatch[1];
+    return /^\d{3,12}$/.test(text) ? text : "";
+  }
+
+  async function detectAccountCharacters(id) {
+    const target = state.panel?.querySelector("[data-search-results]");
+    if (!target) return;
     const world = currentWorldName();
-    target.innerHTML = `<p>Wyszukiwanie postaci widocznych w kliencie na świecie ${escapeMarkup(world)}…</p>`;
-    state.accountCharacters = readPlayersOnCurrentMap()
-      .filter(player => String(player.accountId || "") === id)
+    target.innerHTML = `<p>Pobieranie postaci konta ${escapeMarkup(id)} ze świata ${escapeMarkup(world)}…</p>`;
+    try {
+      const html = await requestPublicProfile(id);
+      state.accountCharacters = parseProfileCharacters(html, world);
+      renderAccountCharacters();
+      if (!state.accountCharacters.length) {
+        target.insertAdjacentHTML(
+          "beforeend",
+          `<p class="mc-muted">Publiczny profil nie zawiera postaci na świecie ${escapeMarkup(world)}.</p>`
+        );
+      }
+    } catch (error) {
+      state.accountCharacters = readVisibleAccountCharacters(id, world);
+      renderAccountCharacters();
+      target.insertAdjacentHTML(
+        "beforeend",
+        `<p class="mc-muted">Nie udało się odczytać publicznego profilu (${escapeMarkup(error?.message || "błąd połączenia")}). Pokazano wyłącznie pasujące postacie aktualnie widoczne w kliencie.</p>`
+      );
+    }
+  }
+
+  function requestPublicProfile(accountId) {
+    const languageDomain = location.hostname.endsWith(".com") ? "www.margonem.com" : "www.margonem.pl";
+    const url = `https://${languageDomain}/profile/view,${encodeURIComponent(accountId)}`;
+    return new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest !== "function") {
+        reject(new Error("brak uprawnienia GM_xmlhttpRequest"));
+        return;
+      }
+      GM_xmlhttpRequest({
+        method: "GET",
+        url,
+        headers: {
+          Accept: "text/html,application/xhtml+xml",
+          "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.7"
+        },
+        anonymous: false,
+        timeout: 15000,
+        onload: response => {
+          if (response.status < 200 || response.status >= 300) {
+            reject(new Error(`HTTP ${response.status || 0}`));
+            return;
+          }
+          if (!String(response.responseText || "").trim()) {
+            reject(new Error("pusty profil"));
+            return;
+          }
+          resolve(response.responseText);
+        },
+        ontimeout: () => reject(new Error("przekroczono czas połączenia")),
+        onerror: () => reject(new Error("błąd połączenia z profilem"))
+      });
+    });
+  }
+
+  function parseProfileCharacters(html, requestedWorld) {
+    const documentProfile = new DOMParser().parseFromString(String(html || ""), "text/html");
+    const requested = normalizeWorldName(requestedWorld);
+    const characters = [];
+    const characterNodes = [
+      ...documentProfile.querySelectorAll(".char-row, .charc, .charcs, [data-character-id], [data-char-id]")
+    ];
+    for (const node of characterNodes) {
+      const value = selector => {
+        const elements = [
+          ...(node.matches(selector) ? [node] : []),
+          ...node.querySelectorAll(selector)
+        ];
+        const formField = elements.find(element => normalize(element.value || element.getAttribute("value")));
+        const element = formField || elements[0];
+        return normalize(
+          element?.value ||
+          element?.getAttribute("value") ||
+          element?.textContent
+        );
+      };
+      const world = normalize(
+        node.dataset.world ||
+        value("input.chworld, .chworld, [name='world'], [data-character-world], [data-char-world], [data-world]")
+      );
+      if (!world || normalizeWorldName(world) !== requested) continue;
+      const name = normalize(
+        node.dataset.nick ||
+        value("input.chnick, .chnick, .character-name, [name='nick'], [data-character-nick], [data-char-nick], [data-nick]")
+      );
+      if (!name) continue;
+      const character = {
+        name,
+        id: normalize(
+          node.dataset.id ||
+          value("input.chid, .chid, [name='char_id'], [name='character_id'], [data-character-id], [data-char-id], [data-id]")
+        ) || null,
+        level: finiteOrNull(
+          node.dataset.lvl ||
+          value("input.chlvl, [name='lvl'], [name='level'], [data-character-level], [data-char-level], [data-lvl], .chlvl")
+        ),
+        world
+      };
+      const dedupeKey = character.id || character.name.toLocaleLowerCase("pl");
+      if (!characters.some(existing => (existing.id || existing.name.toLocaleLowerCase("pl")) === dedupeKey)) {
+        characters.push(character);
+      }
+    }
+    return characters.sort((left, right) =>
+      Number(right.level || 0) - Number(left.level || 0) ||
+      left.name.localeCompare(right.name, "pl")
+    );
+  }
+
+  function readVisibleAccountCharacters(accountId, world) {
+    const characters = readPlayersOnCurrentMap()
+      .filter(player => String(player.accountId || "") === String(accountId))
       .map(player => ({
         name: player.nick,
         id: player.id || null,
@@ -797,28 +926,22 @@
       }));
     const own = readCurrentCharacter();
     if (
-      String(own.accountId || "") === id &&
+      String(own.accountId || "") === String(accountId) &&
       own.nick &&
-      !state.accountCharacters.some(character => sameNick(character.name, own.nick))
+      !characters.some(character => sameNick(character.name, own.nick))
     ) {
-      state.accountCharacters.unshift({
+      characters.unshift({
         name: own.nick,
         id: own.id,
         level: own.level,
         world
       });
     }
-    renderAccountCharacters();
-    if (!state.accountCharacters.length) {
-      target.insertAdjacentHTML(
-        "beforeend",
-        `<p class="mc-muted">Wersja lokalna nie pobiera publicznego profilu. Rozpoznaje wyłącznie postacie, których ID konta klient gry udostępnia na bieżącej mapie.</p>`
-      );
-    }
+    return characters;
   }
 
   function renderAccountCharacters() {
-    const target = state.panel?.querySelector("[data-account-characters]");
+    const target = state.panel?.querySelector("[data-search-results]");
     if (!target) return;
     const world = currentWorldName();
     if (!state.accountCharacters.length) {
@@ -827,23 +950,16 @@
     }
     target.innerHTML = state.accountCharacters.map(character => `
       <article class="mc-character">
-        <strong>${escapeMarkup(character.name)}</strong>
-        ${character.level ? `<small>${escapeMarkup(character.level)} lvl</small>` : ""}
-        <span>
-          <button data-account-kill="${escapeAttribute(character.name)}">.kill</button>
-          <button data-account-unkill="${escapeAttribute(character.name)}">.unkill</button>
-        </span>
+        <span><strong>${escapeMarkup(character.name)}</strong>${character.level ? `<small>${escapeMarkup(character.level)} lvl</small>` : ""}</span>
+        <button type="button" data-select-character="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Wybierz</button>
       </article>`).join("");
-    target.querySelectorAll("[data-account-kill]").forEach(button => button.addEventListener("click", async () => {
-      const time = normalize(state.panel.querySelector("[data-account-time]").value);
-      if (!time) return notice("Wpisz czas kary konta.");
-      const reason = panelValues().powod;
-      const command = `.kill "${button.dataset.accountKill}" ${time}${reason ? ` "${escapeConsole(reason)}"` : ""}`;
-      if (sendViaGameConsole(command)) await recordCommand("KARA KONTA — ZABICIE", command, "CONSOLE", button.dataset.accountKill);
-    }));
-    target.querySelectorAll("[data-account-unkill]").forEach(button => button.addEventListener("click", async () => {
-      const command = `.unkill "${button.dataset.accountUnkill}"`;
-      if (sendViaGameConsole(command)) await recordCommand("KARA KONTA — COFNIĘCIE", command, "CONSOLE", button.dataset.accountUnkill);
+    target.querySelectorAll("[data-select-character]").forEach(button => button.addEventListener("click", () => {
+      state.selected = {
+        nick: button.dataset.selectCharacter || "",
+        id: button.dataset.characterId || resolvePlayerId(button.dataset.selectCharacter) || ""
+      };
+      renderSelected();
+      notice(`Wybrano postać ${state.selected.nick}.`);
     }));
   }
 
@@ -858,7 +974,10 @@
   function readReadyCommands() {
     try {
       const value = JSON.parse(localStorage.getItem(READY_COMMANDS_KEY) || "null");
-      return Array.isArray(value) ? value : structuredClone(DEFAULT_READY_COMMANDS);
+      if (!Array.isArray(value)) return structuredClone(DEFAULT_READY_COMMANDS);
+      const commands = value.filter(command => !LEGACY_READY_COMMAND_IDS.has(command?.id));
+      if (commands.length !== value.length) writeReadyCommands(commands);
+      return commands;
     } catch {
       return structuredClone(DEFAULT_READY_COMMANDS);
     }
@@ -972,6 +1091,26 @@
     return state.active?.participants?.find(item => normalize(item.character_name).toLocaleLowerCase("pl") === wanted) || null;
   }
 
+  function participantStartedAt(participant, verification = state.active?.verification) {
+    return participant?.started_at || participant?.joined_at || verification?.started_at || verification?.created_at;
+  }
+
+  function participantCode(participant, verification = state.active?.verification) {
+    return normalize(participant?.verification_code)
+      || normalize(verification?.verification_code)
+      || "—";
+  }
+
+  function participantStartMap(participant, verification = state.active?.verification) {
+    return participant?.start_map_name || participant?.last_map_name || verification?.start_map_name || "—";
+  }
+
+  function participantDuration(participant, verification = state.active?.verification) {
+    const startedAt = new Date(participantStartedAt(participant, verification)).getTime();
+    const endedAt = participant?.resolved_at ? new Date(participant.resolved_at).getTime() : Date.now();
+    return formatDuration(Math.max(0, endedAt - startedAt));
+  }
+
   function renderActiveSections() {
     const details = state.active;
     const isActive = details?.verification?.status === "ACTIVE";
@@ -987,24 +1126,26 @@
             <button type="button" data-open-active disabled>Otwórz panel</button>
           </div>`;
       }
-      if (timeline) timeline.innerHTML = localJournalMarkup(state.journal);
+      renderJournal(timeline, localJournalMarkup(state.journal), journalRenderSignature(state.journal));
       closeActivePanel(false);
       return;
     }
     if (status) status.textContent = "AKTYWNA";
     const unresolved = (details.participants || []).filter(item => !item.resolved_at);
-    const targets = unresolved.map(item => item.character_name).join(", ") || details.verification.target_character;
     if (summary) {
       summary.innerHTML = `
-        <div class="mc-active-line">
-          <strong>${escapeMarkup(targets)}</strong>
-          <span data-live-duration>${formatDuration(Date.now() - new Date(details.verification.started_at).getTime())}</span>
-          <span>kod ${escapeMarkup(details.verification.verification_code || "—")}</span>
-          <button type="button" data-open-active>Otwórz panel</button>
+        <div class="mc-active-summary-list">
+          ${unresolved.map(item => `
+            <div class="mc-active-line">
+              <strong>${escapeMarkup(item.character_name)}</strong>
+              <span data-participant-started-at="${escapeAttribute(participantStartedAt(item, details.verification))}">${participantDuration(item, details.verification)}</span>
+              <span>kod ${escapeMarkup(participantCode(item, details.verification))}</span>
+              <button type="button" data-open-active>Otwórz panel</button>
+            </div>`).join("")}
         </div>`;
-      summary.querySelector("[data-open-active]")?.addEventListener("click", showActivePanel);
+      summary.querySelectorAll("[data-open-active]").forEach(button => button.addEventListener("click", showActivePanel));
     }
-    if (timeline) timeline.innerHTML = timelineMarkup(details);
+    renderJournal(timeline, timelineMarkup(details), journalRenderSignature(details));
     if (isActive && state.activePanel) renderActivePanel();
   }
 
@@ -1064,20 +1205,25 @@
     const targetNames = unresolved.map(item => item.character_name).join(", ") || verification.target_character || "—";
     root.querySelector("[data-active-panel-title]").textContent = targetNames;
     root.querySelector("[data-active-panel-body]").innerHTML = `
-      <div class="mc-session-grid">
-        <article><small>WERYFIKOWANY GRACZ</small><strong>${escapeMarkup(targetNames)}</strong></article>
-        <article><small>MAPA STARTOWA</small><strong>${escapeMarkup(verification.start_map_name || "—")}</strong></article>
-        <article><small>START</small><strong>${formatDate(verification.started_at)}</strong></article>
-        <article><small>KOD</small><strong>${escapeMarkup(verification.verification_code || "—")}</strong></article>
-        <article><small>CZAS TRWANIA</small><strong data-live-duration>${formatDuration(Date.now() - new Date(verification.started_at).getTime())}</strong></article>
-      </div>
       <section class="mc-participants">
-        <h4>Weryfikowani gracze</h4>
+        <h4>${participants.length > 1 ? "Weryfikacja grupowa" : "Aktywna weryfikacja"}</h4>
         ${participants.map(item => `
-          <article class="mc-participant ${item.resolved_at ? "resolved" : ""}">
-            <div>
-              <strong>${escapeMarkup(item.character_name)}</strong>
-              <small>${item.resolved_at ? "Zakończona" : presenceLabel(item.presence_status)}</small>
+          <article class="mc-participant-session ${item.resolved_at ? "resolved" : ""}">
+            <div class="mc-session-grid">
+              <article><small>WERYFIKOWANY GRACZ</small><strong>${escapeMarkup(item.character_name)}</strong></article>
+              <article><small>MAPA STARTOWA</small><strong>${escapeMarkup(participantStartMap(item, verification))}</strong></article>
+              <article><small>START</small><strong>${formatDate(participantStartedAt(item, verification))}</strong></article>
+              <article><small>KOD</small><strong>${escapeMarkup(participantCode(item, verification))}</strong></article>
+              <article>
+                <small>${item.resolved_at ? "CZAS SESJI" : "CZAS TRWANIA"}</small>
+                <strong${item.resolved_at ? "" : ` data-participant-started-at="${escapeAttribute(participantStartedAt(item, verification))}"`}>${participantDuration(item, verification)}</strong>
+              </article>
+            </div>
+            <div class="mc-participant-actions">
+              <span>${item.resolved_at ? "Zakończona" : presenceLabel(item.presence_status)}</span>
+              ${item.resolved_at ? "" : `
+                <button type="button" data-send-participant-code="${escapeAttribute(item.id)}">Wyślij nowy kod</button>
+                <button type="button" class="danger" data-finish-participant="${escapeAttribute(item.id)}">Zakończ weryfikację</button>`}
             </div>
           </article>`).join("")}
       </section>
@@ -1086,16 +1232,16 @@
         <div>${onMap.filter(player => !findParticipant(player.nick)).map(player =>
           `<button data-add-map-player="${escapeAttribute(player.nick)}" data-player-id="${escapeAttribute(player.id)}">+ ${escapeMarkup(player.nick)}</button>`
         ).join("") || "<small>Brak innych graczy do dodania.</small>"}</div>
-      </section>
-      <div class="mc-active-actions">
-        <button type="button" data-send-new-code>Wyślij nowy kod</button>
-        <button type="button" class="danger" data-finish-verification>Zakończ weryfikację</button>
-      </div>`;
+      </section>`;
     root.querySelectorAll("[data-add-map-player]").forEach(button => button.addEventListener("click", async () => {
       await addParticipant({ nick: button.dataset.addMapPlayer, id: button.dataset.playerId });
     }));
-    root.querySelector("[data-send-new-code]")?.addEventListener("click", sendNewVerificationCode);
-    root.querySelector("[data-finish-verification]")?.addEventListener("click", finishActiveVerification);
+    root.querySelectorAll("[data-send-participant-code]").forEach(button => button.addEventListener("click", async () => {
+      await sendNewVerificationCode(button.dataset.sendParticipantCode);
+    }));
+    root.querySelectorAll("[data-finish-participant]").forEach(button => button.addEventListener("click", async () => {
+      await finishParticipantVerification(button.dataset.finishParticipant);
+    }));
   }
 
   function timelineMarkup(details) {
@@ -1129,14 +1275,14 @@
             ? formatDuration(new Date(verification.ended_at).getTime() - new Date(verification.started_at).getTime())
             : formatDuration(Date.now() - new Date(verification.started_at).getTime());
           return `
-            <details>
+            <details data-journal-id="${escapeAttribute(verification.id)}">
               <summary>
                 <strong>#${escapeMarkup(verification.public_number || verification.id)} · ${escapeMarkup(targets)}</strong>
                 <span>${escapeMarkup(verification.start_map_name || "—")}</span>
-                <span>${duration}</span>
+                <span data-journal-duration data-started-at="${escapeAttribute(verification.started_at)}" data-ended-at="${escapeAttribute(verification.ended_at || "")}">${duration}</span>
                 <b>${verification.status === "ACTIVE" ? "AKTYWNA" : "ZAKOŃCZONA"}</b>
               </summary>
-              <div class="mc-timeline-events">${(details.events || []).map(event => `
+              <div class="mc-timeline-events" data-journal-events="${escapeAttribute(verification.id)}">${(details.events || []).map(event => `
                 <article>
                   <div><strong>${escapeMarkup(eventTitle(event))}</strong><time>${formatDate(event.occurred_at)}</time></div>
                   ${eventDescription(event) ? `<p>${escapeMarkup(eventDescription(event))}</p>` : ""}
@@ -1145,6 +1291,56 @@
             </details>`;
         }).join("")}
       </div>`;
+  }
+
+  function journalRenderSignature(entries) {
+    const list = Array.isArray(entries) ? entries : entries ? [entries] : [];
+    return JSON.stringify(list.map(details => ({
+      verification: [
+        details?.verification?.id,
+        details?.verification?.status,
+        details?.verification?.updated_at,
+        details?.verification?.ended_at
+      ],
+      participants: (details?.participants || []).map(item => [
+        item.id,
+        item.character_name,
+        item.resolved_at,
+        item.verification_code,
+        item.presence_status
+      ]),
+      events: (details?.events || []).map(event => [
+        event.id,
+        event.event_type,
+        event.occurred_at,
+        event.title,
+        event.details?.content,
+        event.details?.code
+      ])
+    })));
+  }
+
+  function renderJournal(target, markup, signature) {
+    if (!target || target.dataset.renderSignature === signature) return;
+    const scrollContainer = target.closest(".mc-window, .mc-active-window");
+    const outerScrollTop = scrollContainer?.scrollTop || 0;
+    const openIds = new Set(
+      [...target.querySelectorAll("details[data-journal-id][open]")]
+        .map(element => element.dataset.journalId)
+    );
+    const innerScroll = new Map(
+      [...target.querySelectorAll("[data-journal-events]")]
+        .map(element => [element.dataset.journalEvents, element.scrollTop])
+    );
+    target.innerHTML = markup;
+    target.dataset.renderSignature = signature;
+    target.querySelectorAll("details[data-journal-id]").forEach(element => {
+      element.open = openIds.has(element.dataset.journalId);
+    });
+    target.querySelectorAll("[data-journal-events]").forEach(element => {
+      element.scrollTop = innerScroll.get(element.dataset.journalEvents) || 0;
+    });
+    if (scrollContainer) scrollContainer.scrollTop = outerScrollTop;
   }
 
   function eventTitle(event) {
@@ -1157,15 +1353,30 @@
     const details = event.details || {};
     if (details.content) return `${details.commandName ? `${details.commandName}: ` : ""}${details.content}`;
     if (event.event_type === "CODE_GENERATED" && details.code) return `Kod: ${details.code}`;
-    if (details.result) return RESULT_LABELS[details.result] || details.result;
     return "";
   }
 
   function updateLiveTime() {
-    if (!state.active?.verification?.started_at) return;
-    const value = formatDuration(Date.now() - new Date(state.active.verification.started_at).getTime());
+    const startedAt = state.active?.verification?.started_at;
+    const value = startedAt
+      ? formatDuration(Date.now() - new Date(startedAt).getTime())
+      : "";
     [state.panel, state.activePanel].filter(Boolean).forEach(root => {
-      root.querySelectorAll("[data-live-duration]").forEach(element => { element.textContent = value; });
+      if (value) {
+        root.querySelectorAll("[data-live-duration]").forEach(element => { element.textContent = value; });
+      }
+      root.querySelectorAll("[data-participant-started-at]").forEach(element => {
+        const startedAt = new Date(element.dataset.participantStartedAt || "").getTime();
+        if (Number.isFinite(startedAt)) element.textContent = formatDuration(Date.now() - startedAt);
+      });
+      root.querySelectorAll("[data-journal-duration]").forEach(element => {
+        const journalStartedAt = new Date(element.dataset.startedAt || "").getTime();
+        const journalEndedAt = new Date(element.dataset.endedAt || "").getTime();
+        if (!Number.isFinite(journalStartedAt)) return;
+        element.textContent = formatDuration(
+          Math.max(0, (Number.isFinite(journalEndedAt) ? journalEndedAt : Date.now()) - journalStartedAt)
+        );
+      });
     });
   }
 
@@ -1231,7 +1442,7 @@
     const map = currentMap();
     const onMap = readPlayersOnCurrentMap().find(item => sameNick(item.nick, nick));
     const moderator = getCurrentCharacterNick();
-    const code = verification.verification_code || "";
+    const code = generateCode();
     const config = readStartConfig();
     const values = { nick, moderator, kod: code, czas: "", powod: "", tresc: "" };
     const local = resolveTemplate(config.local, values);
@@ -1248,13 +1459,17 @@
         if ((record.participants || []).some(item => !item.resolved_at && sameNick(item.character_name, nick))) {
           throw new Error("PARTICIPANT_ALREADY_ADDED");
         }
+        const joinedAt = new Date().toISOString();
         const participant = {
           id: String(database.nextParticipantId++),
           character_name: nick,
           character_id: player.id || onMap?.id || resolvePlayerId(nick) || null,
-          joined_at: new Date().toISOString(),
+          joined_at: joinedAt,
+          started_at: joinedAt,
+          verification_code: code,
+          start_map_id: map.id,
+          start_map_name: map.name,
           resolved_at: null,
-          result: null,
           presence_status: onMap ? "PRESENT" : "MISSING",
           last_map_id: map.id,
           last_map_name: map.name,
@@ -1265,7 +1480,7 @@
         addLocalEvent(database, record, {
           title: `Dodano gracza ${nick} do aktywnej weryfikacji`,
           eventType: "PARTICIPANT_ADDED",
-          details: { characterName: nick, moderator },
+          details: { characterName: nick, moderator, code },
           mapId: map.id,
           mapName: map.name,
           participantId: participant.id
@@ -1280,99 +1495,125 @@
       state.selected = { nick, id: player.id || onMap?.id || "" };
       renderSelected();
       renderActiveSections();
-      notice(`Dodano ${nick} do aktywnej weryfikacji.`);
+      notice(`Dodano ${nick} do aktywnej weryfikacji. Kod gracza: ${code}.`);
     } catch (error) {
       const label = error.message === "PARTICIPANT_ALREADY_ADDED" ? "Ten gracz jest już w aktywnej weryfikacji." : error.message;
       notice(`Nie udało się dodać gracza (${label}).`);
     }
   }
 
-  async function sendNewVerificationCode() {
+  async function sendNewVerificationCode(participantId) {
     const verification = state.active?.verification;
     if (!verification || verification.status !== "ACTIVE") return notice("Brak aktywnej weryfikacji.");
+    const participant = (state.active.participants || []).find(item =>
+      String(item.id) === String(participantId) && !item.resolved_at
+    );
+    if (!participant) return notice("Ten uczestnik nie ma aktywnej weryfikacji.");
     const code = generateCode();
     const map = currentMap();
     try {
       state.active = mutateLocalVerification(verification.id, (record, database) => {
-        record.verification.verification_code = code;
+        const stored = (record.participants || []).find(item =>
+          String(item.id) === String(participantId) && !item.resolved_at
+        );
+        if (!stored) throw new Error("PARTICIPANT_NOT_ACTIVE");
+        stored.verification_code = code;
+        stored.code_updated_at = new Date().toISOString();
         record.verification.updated_at = new Date().toISOString();
         addLocalEvent(database, record, {
-          title: "Wylosowano nowy kod weryfikacyjny",
+          title: `Wylosowano nowy kod dla ${stored.character_name}`,
           eventType: "CODE_GENERATED",
-          details: { code, moderator: getCurrentCharacterNick() },
+          details: { code, moderator: getCurrentCharacterNick(), characterName: stored.character_name },
           mapId: map.id,
-          mapName: map.name
+          mapName: map.name,
+          participantId: stored.id
         });
       });
-      const config = readStartConfig();
-      const moderator = getCurrentCharacterNick();
-      const participants = (state.active.participants || []).filter(item => !item.resolved_at);
-      let sent = 0;
-      for (const participant of participants) {
-        const command = resolveTemplate(config.console, {
-          nick: participant.character_name,
-          moderator,
-          kod: code,
-          czas: "",
-          powod: "",
-          tresc: ""
-        });
-        if (command.missing.length || !command.content.trim()) continue;
-        if (sendViaGameConsole(command.content)) {
-          sent += 1;
-          await recordCommand("NOWY KOD WERYFIKACYJNY", command.content, "CONSOLE", participant.character_name);
-        }
+      const commandTemplate = readStartConfig().sendCode || DEFAULT_START_CONFIG.sendCode;
+      const resolvedCommand = resolveTemplate(commandTemplate, {
+        nick: participant.character_name,
+        moderator: getCurrentCharacterNick(),
+        kod: code,
+        czas: "",
+        powod: "",
+        tresc: ""
+      });
+      if (!resolvedCommand.content.trim() || resolvedCommand.missing.length) {
+        throw new Error(`Polecenie „Wyślij kod” wymaga danych: ${resolvedCommand.missing.join(", ") || "treść polecenia"}`);
       }
+      const command = resolvedCommand.content.trim();
+      const sent = sendViaGameConsole(command);
+      if (sent) await recordCommand("NOWY KOD WERYFIKACYJNY", command, "CONSOLE", participant.character_name);
       renderActiveSections();
-      notice(`Wylosowano kod ${code}${sent ? ` i wysłano do ${sent} graczy` : ""}.`);
+      notice(sent
+        ? `Wysłano nowy kod ${code} graczowi ${participant.character_name}.`
+        : `Wylosowano kod ${code}, ale klient nie udostępnił konsoli do wysłania .reminder.`);
     } catch (error) {
       notice(`Nie udało się wysłać nowego kodu (${error.message}).`);
     }
   }
 
-  async function finishActiveVerification() {
+  async function finishParticipantVerification(participantId) {
     const verification = state.active?.verification;
     if (!verification || verification.status !== "ACTIVE") return notice("Brak aktywnej weryfikacji.");
-    const participants = (state.active.participants || []).filter(item => !item.resolved_at);
-    const names = participants.map(item => item.character_name).join(", ") || verification.target_character || "gracza";
-    if (!confirm(`Zakończyć weryfikację: ${names}?`)) return;
+    const participant = (state.active.participants || []).find(item =>
+      String(item.id) === String(participantId) && !item.resolved_at
+    );
+    if (!participant) return notice("Ten uczestnik nie ma aktywnej weryfikacji.");
+    if (!confirm(`Zakończyć weryfikację gracza ${participant.character_name}?`)) return;
     const finishTemplate = readStartConfig().finish || DEFAULT_START_CONFIG.finish;
     const localMessage = resolveTemplate(finishTemplate, {
-      nick: names,
+      nick: participant.character_name,
       moderator: getCurrentCharacterNick(),
-      wynik: "zakończona"
-    }).content.trim() || `Weryfikacja gracza ${names} została zakończona.`;
+    }).content.trim() || `Weryfikacja gracza ${participant.character_name} została zakończona.`;
     const map = currentMap();
     try {
+      let finishedAll = false;
       state.active = mutateLocalVerification(verification.id, (record, database) => {
         const endedAt = new Date().toISOString();
-        record.verification.status = "COMPLETED";
-        record.verification.result = "COMPLETED";
-        record.verification.ended_at = endedAt;
-        record.verification.updated_at = endedAt;
-        for (const participant of record.participants || []) {
-          if (!participant.resolved_at) {
-            participant.resolved_at = endedAt;
-            participant.result = "COMPLETED";
-          }
-        }
+        const stored = (record.participants || []).find(item =>
+          String(item.id) === String(participantId) && !item.resolved_at
+        );
+        if (!stored) throw new Error("PARTICIPANT_NOT_ACTIVE");
+        stored.resolved_at = endedAt;
+        stored.presence_status = "RESOLVED";
         addLocalEvent(database, record, {
-          title: "Zakończono weryfikację",
-          eventType: "VERIFICATION_FINISHED",
+          title: `Zakończono weryfikację gracza ${stored.character_name}`,
+          eventType: "PARTICIPANT_FINISHED",
           details: {
+            characterName: stored.character_name,
             announcement: localMessage,
             moderator: getCurrentCharacterNick()
           },
           mapId: map.id,
-          mapName: map.name
+          mapName: map.name,
+          participantId: stored.id
         });
+        finishedAll = !(record.participants || []).some(item => !item.resolved_at);
+        if (finishedAll) {
+          record.verification.status = "COMPLETED";
+          record.verification.ended_at = endedAt;
+          addLocalEvent(database, record, {
+            title: "Zakończono całą weryfikację",
+            eventType: "VERIFICATION_FINISHED",
+            details: { moderator: getCurrentCharacterNick() },
+            mapId: map.id,
+            mapName: map.name
+          });
+        }
+        record.verification.updated_at = endedAt;
       });
       const announced = await sendLocalChatMessage(localMessage);
-      closeActivePanel();
-      refreshActive();
+      if (finishedAll) {
+        closeActivePanel();
+        refreshActive();
+      } else {
+        renderActivePanel();
+        renderActiveSections();
+      }
       notice(announced
-        ? "Weryfikacja została zakończona."
-        : "Weryfikacja została zapisana, ale nie udało się wysłać komunikatu na czat lokalny.");
+        ? `Weryfikacja gracza ${participant.character_name} została zakończona.`
+        : `Zakończono weryfikację gracza ${participant.character_name}, ale nie udało się wysłać komunikatu na czat lokalny.`);
     } catch (error) {
       notice(`Nie udało się zakończyć weryfikacji (${error.message}).`);
     }
@@ -1553,14 +1794,15 @@
 
   function currentMap() {
     const engine = getEngine();
+    const page = getPageWindow();
     const map = engine?.map;
     const name = normalize(
       (typeof map?.getName === "function" ? map.getName() : "") ||
-      map?.d?.name || map?.name || window.map?.name || window.g?.map?.name
+      map?.d?.name || map?.name || page.map?.name || page.g?.map?.name
     ) || "Nieznana mapa";
     const id = String(
       (typeof map?.getId === "function" ? map.getId() : "") ||
-      map?.d?.id || map?.id || window.map?.id || window.g?.map?.id || ""
+      map?.d?.id || map?.id || page.map?.id || page.g?.map?.id || ""
     );
     return { id: id || null, name };
   }
@@ -1625,8 +1867,9 @@
 
   function readCurrentCharacter() {
     const engine = getEngine();
+    const page = getPageWindow();
     const hero = engine?.hero;
-    const data = hero?.d || hero || window.hero?.d || window.hero || window.g?.hero || {};
+    const data = hero?.d || hero || page.hero?.d || page.hero || page.g?.hero || {};
     return {
       nick: getCurrentCharacterNick(),
       id: getCurrentCharacterId(),
@@ -1637,24 +1880,31 @@
 
   function getCurrentCharacterNick() {
     const engine = getEngine();
+    const page = getPageWindow();
     return normalize(
       (typeof engine?.hero?.getNick === "function" ? engine.hero.getNick() : "") ||
       engine?.hero?.d?.nick || engine?.hero?.nick ||
-      window.hero?.d?.nick || window.hero?.nick || window.g?.hero?.nick
+      page.hero?.d?.nick || page.hero?.nick || page.g?.hero?.nick
     );
   }
 
   function getCurrentCharacterId() {
     const engine = getEngine();
+    const page = getPageWindow();
     return String(
       (typeof engine?.hero?.getId === "function" ? engine.hero.getId() : "") ||
       engine?.hero?.d?.id || engine?.hero?.id ||
-      window.hero?.d?.id || window.hero?.id || window.g?.hero?.id || ""
+      page.hero?.d?.id || page.hero?.id || page.g?.hero?.id || ""
     ) || null;
   }
 
+  function getPageWindow() {
+    return typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+  }
+
   function getEngine() {
-    return window.Engine || (typeof window.getEngine === "function" ? window.getEngine() : null);
+    const page = getPageWindow();
+    return page.Engine || (typeof page.getEngine === "function" ? page.getEngine() : null);
   }
 
   function getModeratorRankLabel() {
@@ -1752,7 +2002,7 @@
       #${SCRIPT_ID}-launcher:hover{border-color:#d0b45f;background:linear-gradient(#526a33,#28391b)}
       #${SCRIPT_ID}-launcher[data-locked="0"]{cursor:grab}#${SCRIPT_ID}-launcher i{position:absolute;right:-6px;bottom:-6px;width:18px;height:18px;border:1px solid #806a3d;border-radius:50%;background:#171713;font:10px/17px Arial}
       #${SCRIPT_ID}-panel{position:fixed;inset:0;z-index:2147482999;pointer-events:none;color:#e8dfbf;font:12px Arial,sans-serif}
-      #${SCRIPT_ID}-panel *{box-sizing:border-box}#${SCRIPT_ID}-panel .mc-window{position:absolute;right:70px;top:45px;width:min(700px,calc(100vw - 24px));max-height:calc(100vh - 60px);overflow:auto;overscroll-behavior:contain;padding:13px;border:1px solid #66562c;border-radius:5px;background:rgba(28,26,21,.97);box-shadow:0 14px 42px #000c;pointer-events:auto}
+      #${SCRIPT_ID}-panel *{box-sizing:border-box}#${SCRIPT_ID}-panel .mc-window{position:absolute;right:70px;top:45px;width:min(455px,calc(100vw - 24px));max-height:min(65vh,calc(100vh - 60px));overflow:auto;overscroll-behavior:contain;padding:10px;border:1px solid #66562c;border-radius:5px;background:rgba(28,26,21,.97);box-shadow:0 14px 42px #000c;pointer-events:auto}
       #${SCRIPT_ID}-panel .mc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding-bottom:9px;border-bottom:1px solid #5a4a27;cursor:move;user-select:none;touch-action:none}
       #${SCRIPT_ID}-panel .mc-head-actions{display:flex;align-items:center;gap:7px}
       #${SCRIPT_ID}-panel .mc-rank{padding:5px 8px;border:1px solid #31516a;border-radius:8px;background:#101e2b;color:#67d8dc;font-size:11px;font-weight:700;white-space:nowrap}
@@ -1762,15 +2012,15 @@
       #${SCRIPT_ID}-panel input,#${SCRIPT_ID}-panel textarea,#${SCRIPT_ID}-panel select{width:100%;padding:8px;border:1px solid #5d512e;border-radius:2px;background:#11120f;color:#eee2b8;outline:none}#${SCRIPT_ID}-panel textarea{min-height:55px;resize:vertical}
       #${SCRIPT_ID}-panel input:focus,#${SCRIPT_ID}-panel textarea:focus,#${SCRIPT_ID}-panel select:focus{border-color:#b79b4d}
       #${SCRIPT_ID}-panel .mc-selected{margin:9px 0;color:#c0b596}#${SCRIPT_ID}-panel .mc-search{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px}#${SCRIPT_ID}-panel .mc-note{padding:7px;border-left:3px solid #c6a641;background:#151610;color:#9e967e}
-      #${SCRIPT_ID}-panel .mc-command-fields{display:grid;grid-template-columns:120px 110px auto minmax(0,1fr);gap:7px;align-items:end;margin:9px 0}#${SCRIPT_ID}-panel label{display:grid;gap:4px;color:#d4c68e}#${SCRIPT_ID}-panel label.wide{min-width:0}
+      #${SCRIPT_ID}-panel .mc-command-fields{display:grid;grid-template-columns:76px 76px auto minmax(0,1fr);gap:6px;align-items:end;margin:8px 0}#${SCRIPT_ID}-panel label{display:grid;gap:4px;color:#d4c68e}#${SCRIPT_ID}-panel label.wide{min-width:0}
       #${SCRIPT_ID}-panel .mc-command-tabs{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px}#${SCRIPT_ID}-panel .mc-command-tabs button{text-align:left}#${SCRIPT_ID}-panel .mc-command-tabs button.active{border-color:#61cbd0;background:#1d3850;color:#68ded9}#${SCRIPT_ID}-panel .mc-command-panes [data-command-section][hidden]{display:none!important}#${SCRIPT_ID}-panel .mc-command-panes .mc-box{margin-top:7px}#${SCRIPT_ID}-panel .mc-box,#${SCRIPT_ID}-panel .mc-block{margin-top:9px;padding:9px;border:1px solid #554825;border-radius:3px;background:#1d1b16}
       #${SCRIPT_ID}-panel h3,#${SCRIPT_ID}-panel h4{margin:0 0 8px;color:#e4c85f}#${SCRIPT_ID}-panel .mc-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px}#${SCRIPT_ID}-panel .mc-actions button{text-align:left}
       #${SCRIPT_ID}-panel summary{display:flex;justify-content:space-between;gap:10px;color:#e6cc67;font-weight:bold;cursor:pointer;list-style:none}#${SCRIPT_ID}-panel summary b{color:#938a70;font-size:10px}#${SCRIPT_ID}-panel summary::-webkit-details-marker{display:none}
-      #${SCRIPT_ID}-panel .mc-account-search{display:grid;grid-template-columns:minmax(0,1fr) 120px auto;gap:7px}#${SCRIPT_ID}-panel .mc-character{display:flex;justify-content:space-between;align-items:center;padding:7px;border-bottom:1px solid #4c4023}
-      #${SCRIPT_ID}-panel .mc-ready-editor{display:grid;grid-template-columns:180px 110px 1fr auto auto;gap:6px;margin:8px 0}#${SCRIPT_ID}-panel .mc-ready-editor textarea{min-height:37px}#${SCRIPT_ID}-panel .mc-ready-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:8px;border-top:1px solid #4c4023}
+      #${SCRIPT_ID}-panel .mc-search-results{display:grid;margin-top:6px;border:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-search-results:empty{display:none}#${SCRIPT_ID}-panel .mc-character{display:flex;justify-content:space-between;align-items:center;gap:7px;padding:7px;border-bottom:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-character>span{display:grid;gap:2px;min-width:0}
+      #${SCRIPT_ID}-panel .mc-ready-editor{display:grid;grid-template-columns:minmax(0,1fr) 92px auto auto;gap:6px;margin:8px 0}#${SCRIPT_ID}-panel .mc-ready-editor textarea{grid-column:1/-1;min-height:37px}#${SCRIPT_ID}-panel .mc-ready-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:8px;border-top:1px solid #4c4023}
       #${SCRIPT_ID}-panel .mc-ready-row div{display:grid;grid-template-columns:auto auto;gap:4px 8px}#${SCRIPT_ID}-panel .mc-ready-row code{grid-column:1/-1;overflow:hidden;color:#bfcf81;text-overflow:ellipsis;white-space:nowrap}#${SCRIPT_ID}-panel .mc-ready-row small{color:#e2b841}
       #${SCRIPT_ID}-panel .mc-active-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px;padding:8px;background:#11120f}#${SCRIPT_ID}-panel .mc-active-line strong{flex:1}#${SCRIPT_ID}-panel .mc-active-details[hidden]{display:none}
-      #${SCRIPT_ID}-panel .mc-session-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin-top:8px}#${SCRIPT_ID}-panel .mc-session-grid article{display:grid;gap:3px;padding:7px;border:1px solid #4a3e20;background:#12130f}#${SCRIPT_ID}-panel .mc-session-grid small{color:#9f987e;font-size:9px}
+      #${SCRIPT_ID}-panel .mc-session-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin-top:8px}#${SCRIPT_ID}-panel .mc-session-grid article{display:grid;gap:3px;padding:7px;border:1px solid #4a3e20;background:#12130f}#${SCRIPT_ID}-panel .mc-session-grid small{color:#9f987e;font-size:9px}
       #${SCRIPT_ID}-panel .mc-participants,#${SCRIPT_ID}-panel .mc-map-players{margin-top:8px;padding:8px;border:1px solid #4a3e20}#${SCRIPT_ID}-panel .mc-participant{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-top:1px solid #3d351f}#${SCRIPT_ID}-panel .mc-participant div{display:grid}#${SCRIPT_ID}-panel .mc-participant small{color:#9d957b}
       #${SCRIPT_ID}-panel .mc-map-players div{display:flex;flex-wrap:wrap;gap:5px}#${SCRIPT_ID}-panel .mc-timeline-head{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;padding:7px;border:1px solid #4b4022}#${SCRIPT_ID}-panel .mc-timeline-head strong{flex:1}#${SCRIPT_ID}-panel .mc-timeline-head b{color:#84b849}
       #${SCRIPT_ID}-panel .mc-timeline-events{max-height:260px;overflow:auto}#${SCRIPT_ID}-panel .mc-timeline-events article{padding:7px;border-bottom:1px solid #44391f}#${SCRIPT_ID}-panel .mc-timeline-events article div{display:flex;justify-content:space-between;gap:8px}#${SCRIPT_ID}-panel .mc-timeline-events p{margin:4px 0;color:#ddd0aa}#${SCRIPT_ID}-panel .mc-timeline-events small,#${SCRIPT_ID}-panel time{color:#948d78}
@@ -1794,20 +2044,25 @@
       #${SCRIPT_ID}-panel .mc-note{border-color:#53cbd0;background:#0b1b28;color:#9eb5c4}
       #${SCRIPT_ID}-panel .mc-box,#${SCRIPT_ID}-panel .mc-block{border-color:#29465b;background:#0d1b27}
       #${SCRIPT_ID}-panel .mc-active-line,#${SCRIPT_ID}-panel .mc-session-grid article{border-color:#29465b;background:#07131d}
-      #${SCRIPT_ID}-panel .mc-account-search,#${SCRIPT_ID}-panel .mc-character,#${SCRIPT_ID}-panel .mc-ready-row,#${SCRIPT_ID}-panel .mc-participant,#${SCRIPT_ID}-panel .mc-timeline-events article{border-color:#263f52}
+      #${SCRIPT_ID}-panel .mc-search-results,#${SCRIPT_ID}-panel .mc-character,#${SCRIPT_ID}-panel .mc-ready-row,#${SCRIPT_ID}-panel .mc-participant,#${SCRIPT_ID}-panel .mc-timeline-events article{border-color:#263f52}
       #${SCRIPT_ID}-panel .mc-ready-row code{color:#75dce0}
       #${SCRIPT_ID}-panel .mc-ready-row small,#${SCRIPT_ID}-panel .mc-timeline-head b{color:#68ded9}
       #${SCRIPT_ID}-panel .mc-session-grid small,#${SCRIPT_ID}-panel .mc-participant small,#${SCRIPT_ID}-panel .mc-timeline-events small,#${SCRIPT_ID}-panel time{color:#8ea5b5}
       #${SCRIPT_ID}-panel .mc-participants,#${SCRIPT_ID}-panel .mc-map-players,#${SCRIPT_ID}-panel .mc-timeline-head{border-color:#29465b}
       #${SCRIPT_ID}-notice{border-color:#2d6079;background:#0b1b28;color:#dce8f2}
       #${SCRIPT_ID}-active-panel{position:fixed;inset:0;z-index:2147483001;pointer-events:none;color:#dce8f2;font:12px Arial,sans-serif}
-      #${SCRIPT_ID}-active-panel *{box-sizing:border-box}#${SCRIPT_ID}-active-panel .mc-active-window{position:absolute;left:calc(50% - 350px);top:55px;width:min(700px,calc(100vw - 24px));max-height:calc(100vh - 70px);overflow:auto;padding:12px;border:1px solid #2b465c;border-radius:5px;background:rgba(8,18,28,.97);box-shadow:0 14px 42px #000d;pointer-events:auto}
+      #${SCRIPT_ID}-active-panel *{box-sizing:border-box}#${SCRIPT_ID}-active-panel .mc-active-window{position:absolute;left:calc(50% - 228px);top:55px;width:min(455px,calc(100vw - 24px));max-height:min(65vh,calc(100vh - 70px));overflow:auto;padding:10px;border:1px solid #2b465c;border-radius:5px;background:rgba(8,18,28,.97);box-shadow:0 14px 42px #000d;pointer-events:auto}
       #${SCRIPT_ID}-active-panel .mc-active-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding-bottom:9px;border-bottom:1px solid #29445a;cursor:move;user-select:none;touch-action:none}
       #${SCRIPT_ID}-active-panel .mc-active-head small,#${SCRIPT_ID}-active-panel h3,#${SCRIPT_ID}-active-panel h4{color:#68ded9}#${SCRIPT_ID}-active-panel h3{margin:3px 0 0;font-size:18px}#${SCRIPT_ID}-active-panel .mc-active-head button{border:0;background:none;color:#dce8f2;font-size:18px;cursor:pointer}
       #${SCRIPT_ID}-active-panel button{padding:7px 10px;border:1px solid #35556d;border-radius:3px;background:#16283a;color:#dce8f2;font:bold 12px Arial;cursor:pointer}#${SCRIPT_ID}-active-panel button:hover{border-color:#61cbd0;background:#1d3850}#${SCRIPT_ID}-active-panel button.danger{border-color:#784451;background:#45242e;color:#ff9ba8}
-      #${SCRIPT_ID}-active-panel .mc-session-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;margin-top:9px}#${SCRIPT_ID}-active-panel .mc-session-grid article{display:grid;gap:3px;padding:7px;border:1px solid #29465b;background:#07131d}#${SCRIPT_ID}-active-panel .mc-session-grid small{color:#8ea5b5;font-size:9px}
-      #${SCRIPT_ID}-active-panel .mc-participants,#${SCRIPT_ID}-active-panel .mc-map-players{margin-top:8px;padding:8px;border:1px solid #29465b}#${SCRIPT_ID}-active-panel .mc-participant{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-top:1px solid #263f52}#${SCRIPT_ID}-active-panel .mc-participant div{display:grid}#${SCRIPT_ID}-active-panel .mc-participant small{color:#8ea5b5}#${SCRIPT_ID}-active-panel .mc-map-players div{display:flex;flex-wrap:wrap;gap:5px}
-      #${SCRIPT_ID}-active-panel .mc-active-actions{display:flex;justify-content:space-between;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid #29445a}
+      #${SCRIPT_ID}-active-panel .mc-session-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin-top:9px}#${SCRIPT_ID}-active-panel .mc-session-grid article{display:grid;gap:3px;padding:7px;border:1px solid #29465b;background:#07131d}#${SCRIPT_ID}-active-panel .mc-session-grid small{color:#8ea5b5;font-size:9px}
+      #${SCRIPT_ID}-active-panel .mc-participants,#${SCRIPT_ID}-active-panel .mc-map-players{margin-top:8px;padding:8px;border:1px solid #29465b}
+      #${SCRIPT_ID}-active-panel .mc-participant-session{padding:9px 0;border-top:1px solid #263f52}
+      #${SCRIPT_ID}-active-panel .mc-participant-session:first-of-type{border-top:0}
+      #${SCRIPT_ID}-active-panel .mc-participant-session.resolved{opacity:.62}
+      #${SCRIPT_ID}-active-panel .mc-participant-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;margin-top:7px}
+      #${SCRIPT_ID}-active-panel .mc-participant-actions span{margin-right:auto;color:#8ea5b5}
+      #${SCRIPT_ID}-active-panel .mc-map-players div{display:flex;flex-wrap:wrap;gap:5px}
       @media(max-width:760px){#${SCRIPT_ID}-panel .mc-command-tabs{grid-template-columns:1fr}#${SCRIPT_ID}-panel .mc-command-fields{grid-template-columns:1fr 1fr}#${SCRIPT_ID}-panel .mc-command-fields .wide{grid-column:1/-1}#${SCRIPT_ID}-panel .mc-ready-editor{grid-template-columns:1fr}#${SCRIPT_ID}-panel .mc-session-grid,#${SCRIPT_ID}-active-panel .mc-session-grid{grid-template-columns:1fr 1fr}}
     `;
     document.head.appendChild(style);
