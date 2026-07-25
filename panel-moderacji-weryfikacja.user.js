@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.7
+// @version      3.3.9
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-    window[RUNTIME_GUARD] = "3.3.7";
+    window[RUNTIME_GUARD] = "3.3.9";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -51,12 +51,12 @@
     "Rozpocznij weryfikację (test)", "Dodaj do aktywnej weryfikacji (test)"
   ]);
   const DEFAULT_START_CONFIG = {
-    local: "{moderator} rozpoczyna weryfikację gracza {nick}. Proszę o pozostanie w grze i stosowanie się do poleceń moderatora.",
-    console: ".reminder \"{nick}\" \"Rozpoczynam weryfikację. Pozostań w miejscu i wykonuj polecenia. Kod: {kod}.\"",
-    sendCode: ".reminder \"{nick}\" \"Polecenie weryfikacyjne: prześlij wiadomość z kodem {kod}\"",
-    sendNick: ".reminder \"{nick}\" \"Polecenie weryfikacyjne: prześlij wiadomość zawierającą nick swojej postaci.\"",
-    sendScreen: ".reminder \"{nick}\" \"Polecenie weryfikacyjne: prześlij zrzut ekranu całego okna gry.\"",
-    finish: "Weryfikacja gracza {nick} została zakończona."
+    local: "",
+    console: "",
+    sendCode: "",
+    sendNick: "",
+    sendScreen: "",
+    finish: ""
   };
   const DEFAULT_READY_COMMANDS = [];
   const LEGACY_READY_COMMAND_IDS = new Set(["finish", "code", "nick", "screen", "mobs", "trade", "approach"]);
@@ -1013,18 +1013,10 @@
     return {
       local: typeof source.local === "string" ? source.local : DEFAULT_START_CONFIG.local,
       console: typeof source.console === "string" ? source.console : DEFAULT_START_CONFIG.console,
-      sendCode: typeof source.sendCode === "string" && source.sendCode.trim()
-        ? source.sendCode
-        : DEFAULT_START_CONFIG.sendCode,
-      sendNick: typeof source.sendNick === "string" && source.sendNick.trim()
-        ? source.sendNick
-        : DEFAULT_START_CONFIG.sendNick,
-      sendScreen: typeof source.sendScreen === "string" && source.sendScreen.trim()
-        ? source.sendScreen
-        : DEFAULT_START_CONFIG.sendScreen,
-      finish: typeof source.finish === "string" && source.finish.trim()
-        ? source.finish
-        : DEFAULT_START_CONFIG.finish
+      sendCode: typeof source.sendCode === "string" ? source.sendCode : DEFAULT_START_CONFIG.sendCode,
+      sendNick: typeof source.sendNick === "string" ? source.sendNick : DEFAULT_START_CONFIG.sendNick,
+      sendScreen: typeof source.sendScreen === "string" ? source.sendScreen : DEFAULT_START_CONFIG.sendScreen,
+      finish: typeof source.finish === "string" ? source.finish : DEFAULT_START_CONFIG.finish
     };
   }
 
@@ -1661,7 +1653,7 @@
           participantId: stored.id
         });
       });
-      const commandTemplate = readStartConfig().sendCode || DEFAULT_START_CONFIG.sendCode;
+      const commandTemplate = readStartConfig().sendCode;
       const resolvedCommand = resolveTemplate(commandTemplate, {
         nick: participant.character_name,
         moderator: getCurrentCharacterNick(),
@@ -1693,12 +1685,12 @@
     );
     if (!participant) return notice("Ten uczestnik nie ma aktywnej weryfikacji.");
     const definitions = {
-      sendNick: { label: "WYŚLIJ NICK", fallback: DEFAULT_START_CONFIG.sendNick },
-      sendScreen: { label: "WYŚLIJ SCREEN", fallback: DEFAULT_START_CONFIG.sendScreen }
+      sendNick: { label: "WYŚLIJ NICK" },
+      sendScreen: { label: "WYŚLIJ SCREEN" }
     };
     const definition = definitions[commandKey];
     if (!definition) return notice("Nieznany typ polecenia.");
-    const template = readStartConfig()[commandKey] || definition.fallback;
+    const template = readStartConfig()[commandKey];
     const resolved = resolveTemplate(template, {
       nick: participant.character_name,
       moderator: getCurrentCharacterNick(),
@@ -1726,11 +1718,11 @@
     );
     if (!participant) return notice("Ten uczestnik nie ma aktywnej weryfikacji.");
     if (!confirm(`Zakończyć weryfikację gracza ${participant.character_name}?`)) return;
-    const finishTemplate = readStartConfig().finish || DEFAULT_START_CONFIG.finish;
+    const finishTemplate = readStartConfig().finish;
     const localMessage = resolveTemplate(finishTemplate, {
       nick: participant.character_name,
       moderator: getCurrentCharacterNick(),
-    }).content.trim() || `Weryfikacja gracza ${participant.character_name} została zakończona.`;
+    }).content.trim();
     const map = currentMap();
     try {
       let finishedAll = false;
@@ -1768,7 +1760,7 @@
         }
         record.verification.updated_at = endedAt;
       });
-      const announced = await sendLocalChatMessage(localMessage);
+      const announced = localMessage ? await sendLocalChatMessage(localMessage) : true;
       if (finishedAll) {
         closeActivePanel();
         refreshActive();
