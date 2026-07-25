@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.17
+// @version      3.3.18
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-    window[RUNTIME_GUARD] = "3.3.17";
+    window[RUNTIME_GUARD] = "3.3.18";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -1445,7 +1445,12 @@
             <div class="mc-participant-actions">
               <span>${item.resolved_at ? "Zakończona" : presenceLabel(item.presence_status)}</span>
               ${item.resolved_at ? "" : `
-                ${isGroupVerification ? `<button type="button" data-select-participant="${escapeAttribute(item.id)}">Wybierz</button>` : ""}
+                ${isGroupVerification ? `
+                  <button
+                    type="button"
+                    data-select-participant="${escapeAttribute(item.id)}"
+                    data-participant-selected="${selectedNames.some(name => sameNick(name, item.character_name)) ? "1" : "0"}"
+                  >${selectedNames.some(name => sameNick(name, item.character_name)) ? "Wyczyść" : "Wybierz"}</button>` : ""}
                 <button type="button" data-send-participant-code="${escapeAttribute(item.id)}">Wyślij nowy kod</button>
                 <button type="button" data-send-participant-command="sendNick" data-participant-id="${escapeAttribute(item.id)}">Wyślij nick</button>
                 <button type="button" data-send-participant-command="sendScreen" data-participant-id="${escapeAttribute(item.id)}">Wyślij screen</button>
@@ -1471,11 +1476,18 @@
     root.querySelectorAll("[data-select-participant]").forEach(button => button.addEventListener("click", () => {
       const participant = unresolved.find(item => String(item.id) === String(button.dataset.selectParticipant));
       if (!participant) return;
-      selectPlayers([{
+      const participantPlayer = {
         nick: participant.character_name,
         id: participant.character_id || resolvePlayerId(participant.character_name) || ""
-      }], { renderActive: true });
-      notice(`Wybrano gracza ${participant.character_name}.`);
+      };
+      const currentSelection = selectedPlayers();
+      const isSelected = currentSelection.some(item => sameNick(item.nick, participant.character_name));
+      selectPlayers(isSelected
+        ? currentSelection.filter(item => !sameNick(item.nick, participant.character_name))
+        : [...currentSelection, participantPlayer], { renderActive: true });
+      notice(isSelected
+        ? `Odznaczono gracza ${participant.character_name}.`
+        : `Wybrano gracza ${participant.character_name}.`);
     }));
     root.querySelector("[data-select-all-participants]")?.addEventListener("click", () => {
       selectPlayers(unresolved.map(item => ({
@@ -2562,5 +2574,5 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  console.info("[Centrum Moderacji] v3.0.0 gotowe .");
+  console.info("[Centrum Moderacji] v3.0.0 gotowe.");
 })();
