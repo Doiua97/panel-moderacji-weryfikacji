@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.9
+// @version      3.3.14
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-    window[RUNTIME_GUARD] = "3.3.9";
+    window[RUNTIME_GUARD] = "3.3.14";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -39,6 +39,7 @@
   const PANEL_OPEN_KEY = `${SCRIPT_ID}:panel-open`;
   const ACTIVE_PANEL_POSITION_KEY = `${SCRIPT_ID}:active-panel-position`;
   const ACTIVE_PANEL_OPEN_KEY = `${SCRIPT_ID}:active-panel-open`;
+  const ACTIVE_MAP_PLAYERS_COLLAPSED_KEY = `${SCRIPT_ID}:active-map-players-collapsed`;
   const READY_COMMANDS_KEY = `${SCRIPT_ID}:ready-commands`;
   const START_CONFIG_KEY = `${SCRIPT_ID}:start-config`;
   const WIDGET_KEY = "MARGO_MODERATION_CENTER";
@@ -579,7 +580,7 @@
         </details>
 
         <details class="mc-block">
-          <summary>Rozpoczęcie i zakończenie weryfikacji <b>ZAPIS LOKALNY</b></summary>
+          <summary>Polecenia weryfikacyjne <b>ZAPIS LOKALNY</b></summary>
           <p>Pierwsza wiadomość trafia na czat lokalny, a następnie polecenie do konsoli. Sesję rozpoczynasz przez PPM na graczu.</p>
           <label>Wiadomość lokalna<textarea data-start-local>${escapeMarkup(start.local)}</textarea></label>
           <label>Komenda konsoli<textarea data-start-console>${escapeMarkup(start.console)}</textarea></label>
@@ -608,11 +609,10 @@
 
         <details class="mc-block">
           <summary>Dziennik weryfikacji <b>ZAPIS LOKALNY</b></summary>
+          <div data-timeline></div>
           <div class="mc-journal-toolbar">
-            <span>Usuwa wszystkie zapisane weryfikacje z aktualnego świata.</span>
             <button type="button" class="danger" data-clear-journal>Wyczyść</button>
           </div>
-          <div data-timeline></div>
         </details>
       </div>`;
   }
@@ -996,7 +996,14 @@
     target.innerHTML = state.accountCharacters.map(character => `
       <article class="mc-character">
         <span><strong>${escapeMarkup(character.name)}</strong>${character.level ? `<small>${escapeMarkup(character.level)} lvl</small>` : ""}</span>
-        <button type="button" data-select-character="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Wybierz</button>
+        <div class="mc-character-actions">
+          <button type="button" data-select-character="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Wybierz</button>
+          <button type="button" data-character-command="reminder" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Upomnienie</button>
+          <button type="button" data-character-command="mute" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Wycisz</button>
+          <button type="button" data-character-command="unmute" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Odcisz</button>
+          <button type="button" class="danger" data-character-command="kill" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Kill</button>
+          <button type="button" class="danger" data-character-command="unkill" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Unkill</button>
+        </div>
       </article>`).join("");
     target.querySelectorAll("[data-select-character]").forEach(button => button.addEventListener("click", () => {
       state.selected = {
@@ -1005,6 +1012,14 @@
       };
       renderSelected();
       notice(`Wybrano postać ${state.selected.nick}.`);
+    }));
+    target.querySelectorAll("[data-character-command]").forEach(button => button.addEventListener("click", async () => {
+      state.selected = {
+        nick: button.dataset.characterName || "",
+        id: button.dataset.characterId || resolvePlayerId(button.dataset.characterName) || ""
+      };
+      renderSelected();
+      await executeModeratorCommand(button.dataset.characterCommand);
     }));
   }
 
@@ -1322,6 +1337,7 @@
     const participants = details.participants || [];
     const unresolved = participants.filter(item => !item.resolved_at);
     const targetNames = unresolved.map(item => item.character_name).join(", ") || verification.target_character || "—";
+    const mapPlayersCollapsed = localStorage.getItem(ACTIVE_MAP_PLAYERS_COLLAPSED_KEY) === "1";
     root.querySelector("[data-active-panel-title]").textContent = targetNames;
     root.querySelector("[data-active-panel-body]").innerHTML = `
       <section class="mc-participants">
@@ -1348,12 +1364,18 @@
             </div>
           </article>`).join("")}
       </section>
-      <section class="mc-map-players">
-        <h4>Gracze na bieżącej mapie</h4>
+      <details class="mc-map-players" data-map-players-section ${mapPlayersCollapsed ? "" : "open"}>
+        <summary>Gracze na bieżącej mapie <b data-map-players-toggle-label>${mapPlayersCollapsed ? "+" : "−"}</b></summary>
         <div>${onMap.filter(player => !findParticipant(player.nick)).map(player =>
           `<button data-add-map-player="${escapeAttribute(player.nick)}" data-player-id="${escapeAttribute(player.id)}">+ ${escapeMarkup(player.nick)}</button>`
         ).join("") || "<small>Brak innych graczy do dodania.</small>"}</div>
-      </section>`;
+      </details>`;
+    const mapPlayersSection = root.querySelector("[data-map-players-section]");
+    mapPlayersSection?.addEventListener("toggle", () => {
+      localStorage.setItem(ACTIVE_MAP_PLAYERS_COLLAPSED_KEY, mapPlayersSection.open ? "0" : "1");
+      const label = mapPlayersSection.querySelector("[data-map-players-toggle-label]");
+      if (label) label.textContent = mapPlayersSection.open ? "−" : "+";
+    });
     root.querySelectorAll("[data-add-map-player]").forEach(button => button.addEventListener("click", async () => {
       await addParticipant({ nick: button.dataset.addMapPlayer, id: button.dataset.playerId });
     }));
@@ -1390,31 +1412,62 @@
     if (!entries?.length) return `<p>Dziennik jest pusty.</p>`;
     return `
       <div class="mc-local-journal">
-        ${entries.map(details => {
+        ${entries.flatMap(details => {
           const verification = details.verification;
-          const targets = (details.participants || []).map(item => item.character_name).join(", ")
-            || verification.target_character
-            || "—";
-          const duration = verification.ended_at
-            ? formatDuration(new Date(verification.ended_at).getTime() - new Date(verification.started_at).getTime())
-            : formatDuration(Date.now() - new Date(verification.started_at).getTime());
-          return `
-            <details data-journal-id="${escapeAttribute(verification.id)}">
+          const participants = details.participants?.length
+            ? details.participants
+            : [{
+                id: "legacy",
+                character_name: verification.target_character || "—",
+                started_at: verification.started_at,
+                start_map_name: verification.start_map_name,
+                resolved_at: verification.ended_at
+              }];
+          return participants.map((participant, participantIndex) => {
+            const journalId = `${verification.id}:${participant.id || participantIndex}`;
+            const startedAt = participantStartedAt(participant, verification);
+            const endedAt = participant.resolved_at
+              || (verification.status === "ACTIVE" ? "" : verification.ended_at || "");
+            const duration = formatDuration(
+              Math.max(0, new Date(endedAt || Date.now()).getTime() - new Date(startedAt).getTime())
+            );
+            const participantEvents = (details.events || []).filter(event =>
+              eventBelongsToParticipant(event, participant, participants.length)
+            );
+            const isActive = verification.status === "ACTIVE" && !participant.resolved_at;
+            return `
+            <details data-journal-id="${escapeAttribute(journalId)}">
               <summary>
-                <strong>#${escapeMarkup(verification.public_number || verification.id)} · ${escapeMarkup(targets)}</strong>
-                <span>${escapeMarkup(verification.start_map_name || "—")}</span>
-                <span data-journal-duration data-started-at="${escapeAttribute(verification.started_at)}" data-ended-at="${escapeAttribute(verification.ended_at || "")}">${duration}</span>
-                <b>${verification.status === "ACTIVE" ? "AKTYWNA" : "ZAKOŃCZONA"}</b>
+                <strong>#${escapeMarkup(verification.public_number || verification.id)} · ${escapeMarkup(participant.character_name || "—")}</strong>
+                <span>${escapeMarkup(participantStartMap(participant, verification))}</span>
+                <span data-journal-duration data-started-at="${escapeAttribute(startedAt)}" data-ended-at="${escapeAttribute(endedAt)}">${duration}</span>
+                <b>${isActive ? "AKTYWNA" : "ZAKOŃCZONA"}</b>
               </summary>
-              <div class="mc-timeline-events" data-journal-events="${escapeAttribute(verification.id)}">${(details.events || []).map(event => `
+              <div class="mc-timeline-events" data-journal-events="${escapeAttribute(journalId)}">${participantEvents.map(event => `
                 <article>
                   <div><strong>${escapeMarkup(eventTitle(event))}</strong><time>${formatDate(event.occurred_at)}</time></div>
                   ${eventDescription(event) ? `<p>${escapeMarkup(eventDescription(event))}</p>` : ""}
                   <small>${escapeMarkup([event.details?.channel, event.map_name].filter(Boolean).join(" · "))}</small>
                 </article>`).join("") || "<p>Brak zdarzeń.</p>"}</div>
             </details>`;
+          });
         }).join("")}
       </div>`;
+  }
+
+  function eventBelongsToParticipant(event, participant, participantCount) {
+    const participantId = String(participant?.id || "");
+    const eventParticipantId = String(event?.participant_id || "");
+    if (eventParticipantId) return Boolean(participantId) && eventParticipantId === participantId;
+    const eventNames = [
+      event?.details?.targetCharacter,
+      event?.details?.characterName,
+      event?.details?.target_character
+    ].filter(Boolean);
+    if (eventNames.length) {
+      return eventNames.some(name => sameNick(name, participant?.character_name));
+    }
+    return participantCount === 1;
   }
 
   function journalRenderSignature(entries) {
@@ -2174,13 +2227,14 @@
       #${SCRIPT_ID}-panel h3,#${SCRIPT_ID}-panel h4{margin:0 0 8px;color:#e4c85f}#${SCRIPT_ID}-panel .mc-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px}#${SCRIPT_ID}-panel .mc-actions button{text-align:left}
       #${SCRIPT_ID}-panel summary{display:flex;justify-content:space-between;gap:10px;color:#e6cc67;font-weight:bold;cursor:pointer;list-style:none}#${SCRIPT_ID}-panel summary b{color:#938a70;font-size:10px}#${SCRIPT_ID}-panel summary::-webkit-details-marker{display:none}
       #${SCRIPT_ID}-panel .mc-search-results{display:grid;margin-top:6px;border:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-search-results:empty{display:none}#${SCRIPT_ID}-panel .mc-character{display:flex;justify-content:space-between;align-items:center;gap:7px;padding:7px;border-bottom:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-character>span{display:grid;gap:2px;min-width:0}
+      #${SCRIPT_ID}-panel .mc-character-actions{display:flex;flex:1;flex-wrap:wrap;justify-content:flex-end;gap:4px}#${SCRIPT_ID}-panel .mc-character-actions button{padding:4px 6px;font-size:10px;line-height:1.2}
       #${SCRIPT_ID}-panel .mc-ready-editor{display:grid;grid-template-columns:minmax(0,1fr) 92px auto auto;gap:6px;margin:8px 0}#${SCRIPT_ID}-panel .mc-ready-editor textarea{grid-column:1/-1;min-height:37px}#${SCRIPT_ID}-panel .mc-ready-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:8px;border-top:1px solid #4c4023}
       #${SCRIPT_ID}-panel .mc-ready-row div{display:grid;grid-template-columns:auto auto;gap:4px 8px}#${SCRIPT_ID}-panel .mc-ready-row code{grid-column:1/-1;overflow:hidden;color:#bfcf81;text-overflow:ellipsis;white-space:nowrap}#${SCRIPT_ID}-panel .mc-ready-row small{color:#e2b841}
       #${SCRIPT_ID}-panel .mc-active-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px;padding:8px;background:#11120f}#${SCRIPT_ID}-panel .mc-active-line strong{flex:1}#${SCRIPT_ID}-panel .mc-active-details[hidden]{display:none}
       #${SCRIPT_ID}-panel .mc-session-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin-top:8px}#${SCRIPT_ID}-panel .mc-session-grid article{display:grid;gap:3px;padding:7px;border:1px solid #4a3e20;background:#12130f}#${SCRIPT_ID}-panel .mc-session-grid small{color:#9f987e;font-size:9px}
       #${SCRIPT_ID}-panel .mc-participants,#${SCRIPT_ID}-panel .mc-map-players{margin-top:8px;padding:8px;border:1px solid #4a3e20}#${SCRIPT_ID}-panel .mc-participant{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-top:1px solid #3d351f}#${SCRIPT_ID}-panel .mc-participant div{display:grid}#${SCRIPT_ID}-panel .mc-participant small{color:#9d957b}
       #${SCRIPT_ID}-panel .mc-map-players div{display:flex;flex-wrap:wrap;gap:5px}#${SCRIPT_ID}-panel .mc-timeline-head{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;padding:7px;border:1px solid #4b4022}#${SCRIPT_ID}-panel .mc-timeline-head strong{flex:1}#${SCRIPT_ID}-panel .mc-timeline-head b{color:#84b849}
-      #${SCRIPT_ID}-panel .mc-journal-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0 2px;padding:7px;border:1px solid #44391f;background:#17150f}#${SCRIPT_ID}-panel .mc-journal-toolbar span{color:#948d78;font-size:11px}#${SCRIPT_ID}-panel .mc-timeline-events{max-height:none;overflow:visible}#${SCRIPT_ID}-panel details[data-journal-id]:not([open])>.mc-timeline-events{display:none!important}#${SCRIPT_ID}-panel .mc-timeline-events article{padding:7px;border-bottom:1px solid #44391f}#${SCRIPT_ID}-panel .mc-timeline-events article div{display:flex;justify-content:space-between;gap:8px}#${SCRIPT_ID}-panel .mc-timeline-events p{margin:4px 0;color:#ddd0aa}#${SCRIPT_ID}-panel .mc-timeline-events small,#${SCRIPT_ID}-panel time{color:#948d78}
+      #${SCRIPT_ID}-panel .mc-journal-toolbar{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin:8px 0 2px;padding:7px;border:1px solid #44391f;background:#17150f}#${SCRIPT_ID}-panel .mc-timeline-events{max-height:none;overflow:visible}#${SCRIPT_ID}-panel details[data-journal-id]:not([open])>.mc-timeline-events{display:none!important}#${SCRIPT_ID}-panel .mc-timeline-events article{padding:7px;border-bottom:1px solid #44391f}#${SCRIPT_ID}-panel .mc-timeline-events article div{display:flex;justify-content:space-between;gap:8px}#${SCRIPT_ID}-panel .mc-timeline-events p{margin:4px 0;color:#ddd0aa}#${SCRIPT_ID}-panel .mc-timeline-events small,#${SCRIPT_ID}-panel time{color:#948d78}
       #${SCRIPT_ID}-notice{position:fixed;left:50%;top:70px;z-index:2147483647;max-width:560px;transform:translateX(-50%);padding:10px 14px;border:1px solid #806a3d;border-radius:4px;background:#24221e;color:#f2e4b1;box-shadow:0 5px 20px #000;font:13px Arial,sans-serif}
       #${SCRIPT_ID}-launcher{border-color:#2b6079;background:linear-gradient(145deg,#123346,#081824);color:#68ded9;font-family:Arial,sans-serif;box-shadow:0 5px 20px #000c}
       #${SCRIPT_ID}-launcher:hover{border-color:#68ded9;background:linear-gradient(145deg,#17445b,#0b2231)}
@@ -2215,6 +2269,7 @@
       #${SCRIPT_ID}-active-panel button{padding:7px 10px;border:1px solid #35556d;border-radius:3px;background:#16283a;color:#dce8f2;font:bold 12px Arial;cursor:pointer}#${SCRIPT_ID}-active-panel button:hover{border-color:#61cbd0;background:#1d3850}#${SCRIPT_ID}-active-panel button.danger{border-color:#784451;background:#45242e;color:#ff9ba8}
       #${SCRIPT_ID}-active-panel .mc-session-grid{display:grid;grid-template-columns:1.35fr 1.35fr 1.3fr .7fr .9fr;gap:4px;margin-top:6px}#${SCRIPT_ID}-active-panel .mc-session-grid article{display:grid;align-content:center;gap:2px;min-height:42px;padding:5px 6px;border:1px solid #29465b;background:#07131d}#${SCRIPT_ID}-active-panel .mc-session-grid small{color:#8ea5b5;font-size:8px}#${SCRIPT_ID}-active-panel .mc-session-grid strong{font-size:11px;overflow-wrap:anywhere}
       #${SCRIPT_ID}-active-panel .mc-participants,#${SCRIPT_ID}-active-panel .mc-map-players{margin-top:6px;padding:6px;border:1px solid #29465b}
+      #${SCRIPT_ID}-active-panel .mc-map-players>summary{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#68ded9;font-weight:800;cursor:pointer;user-select:none;list-style:none}#${SCRIPT_ID}-active-panel .mc-map-players>summary::-webkit-details-marker{display:none}#${SCRIPT_ID}-active-panel .mc-map-players>summary b{min-width:18px;text-align:center;color:#dce8f2;font-size:16px}
       #${SCRIPT_ID}-active-panel .mc-participant-session{padding:6px 0;border-top:1px solid #263f52}
       #${SCRIPT_ID}-active-panel .mc-participant-session:first-of-type{border-top:0}
       #${SCRIPT_ID}-active-panel .mc-participant-session.resolved{opacity:.62}
