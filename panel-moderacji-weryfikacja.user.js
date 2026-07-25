@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.6
+// @version      3.3.7
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-    window[RUNTIME_GUARD] = "3.3.6";
+    window[RUNTIME_GUARD] = "3.3.7";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -510,6 +510,7 @@
   }
 
   function closePanel() {
+    persistStartConfigFromPanel(state.panel, false);
     state.panel?.remove();
     state.panel = null;
     localStorage.setItem(PANEL_OPEN_KEY, "0");
@@ -656,19 +657,9 @@
     overlay.querySelectorAll("[data-command]").forEach(button => {
       button.addEventListener("click", () => executeModeratorCommand(button.dataset.command));
     });
-    const saveStartConfig = (showNotice = true) => {
-      const config = {
-        local: overlay.querySelector("[data-start-local]").value.trim(),
-        console: overlay.querySelector("[data-start-console]").value.trim(),
-        sendCode: overlay.querySelector("[data-send-code-command]").value.trim() || DEFAULT_START_CONFIG.sendCode,
-        sendNick: overlay.querySelector("[data-send-nick-command]").value.trim() || DEFAULT_START_CONFIG.sendNick,
-        sendScreen: overlay.querySelector("[data-send-screen-command]").value.trim() || DEFAULT_START_CONFIG.sendScreen,
-        finish: overlay.querySelector("[data-finish-local]").value.trim() || DEFAULT_START_CONFIG.finish
-      };
-      localStorage.setItem(START_CONFIG_KEY, JSON.stringify(config));
-      if (showNotice) notice("Zapisano treści rozpoczęcia i zakończenia weryfikacji.");
-    };
-    overlay.querySelector("[data-save-start]").addEventListener("click", () => saveStartConfig(true));
+    overlay.querySelector("[data-save-start]").addEventListener("click", () => {
+      persistStartConfigFromPanel(overlay, true);
+    });
     overlay.querySelectorAll([
       "[data-start-local]",
       "[data-start-console]",
@@ -677,7 +668,7 @@
       "[data-send-screen-command]",
       "[data-finish-local]"
     ].join(",")).forEach(field => {
-      field.addEventListener("change", () => saveStartConfig(false));
+      field.addEventListener("input", () => persistStartConfigFromPanel(overlay, false));
     });
     overlay.querySelector("[data-ready-save]").addEventListener("click", saveReadyCommand);
     overlay.querySelector("[data-ready-cancel]").addEventListener("click", resetReadyEditor);
@@ -1017,11 +1008,80 @@
     }));
   }
 
+  function normalizeStartConfig(value = {}) {
+    const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    return {
+      local: typeof source.local === "string" ? source.local : DEFAULT_START_CONFIG.local,
+      console: typeof source.console === "string" ? source.console : DEFAULT_START_CONFIG.console,
+      sendCode: typeof source.sendCode === "string" && source.sendCode.trim()
+        ? source.sendCode
+        : DEFAULT_START_CONFIG.sendCode,
+      sendNick: typeof source.sendNick === "string" && source.sendNick.trim()
+        ? source.sendNick
+        : DEFAULT_START_CONFIG.sendNick,
+      sendScreen: typeof source.sendScreen === "string" && source.sendScreen.trim()
+        ? source.sendScreen
+        : DEFAULT_START_CONFIG.sendScreen,
+      finish: typeof source.finish === "string" && source.finish.trim()
+        ? source.finish
+        : DEFAULT_START_CONFIG.finish
+    };
+  }
+
   function readStartConfig() {
     try {
-      return { ...DEFAULT_START_CONFIG, ...JSON.parse(localStorage.getItem(START_CONFIG_KEY) || "{}") };
+      return normalizeStartConfig(JSON.parse(localStorage.getItem(START_CONFIG_KEY) || "{}"));
     } catch {
-      return { ...DEFAULT_START_CONFIG };
+      return normalizeStartConfig();
+    }
+  }
+
+  function writeStartConfig(value) {
+    const normalized = normalizeStartConfig(value);
+    localStorage.setItem(START_CONFIG_KEY, JSON.stringify(normalized));
+    return readStartConfig();
+  }
+
+  function collectStartConfig(root) {
+    if (!root) return readStartConfig();
+    return {
+      local: root.querySelector("[data-start-local]")?.value.trim() ?? "",
+      console: root.querySelector("[data-start-console]")?.value.trim() ?? "",
+      sendCode: root.querySelector("[data-send-code-command]")?.value.trim() ?? "",
+      sendNick: root.querySelector("[data-send-nick-command]")?.value.trim() ?? "",
+      sendScreen: root.querySelector("[data-send-screen-command]")?.value.trim() ?? "",
+      finish: root.querySelector("[data-finish-local]")?.value.trim() ?? ""
+    };
+  }
+
+  function persistStartConfigFromPanel(root, showNotice = false) {
+    if (!root?.isConnected) return false;
+    try {
+      const expected = normalizeStartConfig(collectStartConfig(root));
+      const saved = writeStartConfig(expected);
+      const fields = {
+        local: "[data-start-local]",
+        console: "[data-start-console]",
+        sendCode: "[data-send-code-command]",
+        sendNick: "[data-send-nick-command]",
+        sendScreen: "[data-send-screen-command]",
+        finish: "[data-finish-local]"
+      };
+      const complete = Object.entries(fields).every(([key, selector]) => {
+        const field = root.querySelector(selector);
+        if (!field || saved[key] !== expected[key]) return false;
+        if (showNotice) field.value = saved[key];
+        return true;
+      });
+      if (!complete) {
+        if (showNotice) notice("Nie udało się zapisać wszystkich pól konfiguracji.");
+        return false;
+      }
+      if (showNotice) notice("Zapisano wszystkie treści rozpoczęcia i zakończenia weryfikacji.");
+      return true;
+    } catch (error) {
+      if (showNotice) notice(`Nie udało się zapisać konfiguracji (${error.message}).`);
+      return false;
     }
   }
 
