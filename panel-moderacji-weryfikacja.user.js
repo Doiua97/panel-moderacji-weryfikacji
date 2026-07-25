@@ -2355,5 +2355,5 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  console.info("[Centrum Moderacji] v3.0.0 gotowe — tryb lokalny bez API i zewnętrznego runtime.");
+  console.info("[Centrum Moderacji] v3.0.0 gotowe.");
 })();
