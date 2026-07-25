@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.15
+// @version      3.3.17
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-    window[RUNTIME_GUARD] = "3.3.15";
+    window[RUNTIME_GUARD] = "3.3.17";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -63,6 +63,7 @@
   const LEGACY_READY_COMMAND_IDS = new Set(["finish", "code", "nick", "screen", "mobs", "trade", "approach"]);
   const state = {
     selected: { nick: "", id: "" },
+    selectedPlayers: [],
     active: null,
     accountCharacters: [],
     lastContextTarget: null,
@@ -496,7 +497,7 @@
 
   function showPanel(player = null) {
     if (state.panel) closePanel();
-    if (player?.nick) state.selected = { nick: player.nick, id: player.id || resolvePlayerId(player.nick) || "" };
+    if (player?.nick) selectPlayers([{ nick: player.nick, id: player.id || resolvePlayerId(player.nick) || "" }]);
     const overlay = document.createElement("div");
     overlay.id = `${SCRIPT_ID}-panel`;
     overlay.innerHTML = panelMarkup();
@@ -632,7 +633,7 @@
       if (event.key === "Enter") selectFromSearch();
     });
     overlay.querySelector("[data-clear-player]").addEventListener("click", () => {
-      state.selected = { nick: "", id: "" };
+      selectPlayers([]);
       state.accountCharacters = [];
       const input = overlay.querySelector("[data-search]");
       const results = overlay.querySelector("[data-search-results]");
@@ -716,8 +717,7 @@
       await detectAccountCharacters(accountId);
       return;
     }
-    state.selected = { nick: value, id: resolvePlayerId(value) || "" };
-    renderSelected();
+    selectPlayers([{ nick: value, id: resolvePlayerId(value) || "" }]);
   }
 
   function renderSelected() {
@@ -725,17 +725,53 @@
     state.panel.querySelector("[data-selected]").textContent = state.selected.nick || "nie rozpoznano";
   }
 
-  function panelValues() {
-    const selectedParticipant = findParticipant(state.selected.nick);
+  function selectPlayers(players = [], options = {}) {
+    const normalized = [];
+    const seen = new Set();
+    for (const player of Array.isArray(players) ? players : [players]) {
+      const nick = normalize(player?.nick);
+      if (!nick) continue;
+      const key = nick.toLocaleLowerCase("pl");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      normalized.push({
+        nick,
+        id: player?.id || resolvePlayerId(nick) || ""
+      });
+    }
+    state.selectedPlayers = normalized;
+    state.selected = normalized.length
+      ? {
+          nick: normalized.map(item => item.nick).join(", "),
+          id: normalized.length === 1 ? normalized[0].id : ""
+        }
+      : { nick: "", id: "" };
+    renderSelected();
+    if (options.renderActive && state.activePanel) renderActivePanel();
+  }
+
+  function selectedPlayers() {
+    if (state.selectedPlayers.length) return [...state.selectedPlayers];
+    return state.selected.nick ? [{ ...state.selected }] : [];
+  }
+
+  function panelValues(additions = {}) {
+    const selectedNick = Object.prototype.hasOwnProperty.call(additions, "nick")
+      ? normalize(additions.nick)
+      : state.selected.nick;
+    const selectedParticipant = findParticipant(selectedNick);
     return {
-      nick: state.selected.nick,
+      nick: selectedNick,
       moderator: getCurrentCharacterNick(),
       czas: normalize(state.panel?.querySelector("[data-time]")?.value),
       powod: normalize(state.panel?.querySelector("[data-reason]")?.value),
       tresc: normalize(state.panel?.querySelector("[data-reason]")?.value),
-      kod: normalize(state.panel?.querySelector("[data-code]")?.value)
+      kod: Object.prototype.hasOwnProperty.call(additions, "kod")
+        ? normalize(additions.kod)
+        : normalize(state.panel?.querySelector("[data-code]")?.value)
         || normalize(selectedParticipant?.verification_code)
-        || normalize(state.active?.verification?.verification_code)
+        || normalize(state.active?.verification?.verification_code),
+      ...additions
     };
   }
 
@@ -787,58 +823,74 @@
   }
 
   async function executeModeratorCommand(action) {
-    const values = panelValues();
     const needsTarget = ["reminder", "mute", "unmute", "kill", "unkill", "chatadd", "chatdel"].includes(action);
-    if (needsTarget && !values.nick) return notice("Najpierw wybierz gracza.");
-    let command = "";
-    let label = "";
-    if (action === "reminder") {
-      const reminder = resolveTemplate(values.powod || "{kod}", values);
-      if (!reminder.content.trim() || reminder.missing.length) {
-        return notice(`Wpisz treść upomnienia lub wylosuj kod${reminder.missing.length ? ` (${reminder.missing.join(", ")})` : ""}.`);
+    const targets = needsTarget ? selectedPlayers() : [{ nick: "", id: "" }];
+    if (needsTarget && !targets.length) return notice("Najpierw wybierz gracza.");
+    const sentCommands = [];
+    for (const target of targets) {
+      const participant = findParticipant(target.nick);
+      const values = panelValues({
+        nick: target.nick,
+        kod: normalize(participant?.verification_code)
+          || normalize(state.panel?.querySelector("[data-code]")?.value)
+          || normalize(state.active?.verification?.verification_code)
+      });
+      let command = "";
+      let label = "";
+      if (action === "reminder") {
+        const reminder = resolveTemplate(values.powod || "{kod}", values);
+        if (!reminder.content.trim() || reminder.missing.length) {
+          return notice(`Wpisz treść upomnienia lub wylosuj kod${reminder.missing.length ? ` (${reminder.missing.join(", ")})` : ""}.`);
+        }
+        command = `.reminder "${values.nick}" "${escapeConsole(reminder.content.trim())}"`;
+        label = "UPOMNIENIE";
+      } else if (action === "mute") {
+        if (!values.czas) return notice("Wpisz czas wyciszenia.");
+        command = `.mute "${values.nick}" ${values.czas}${values.powod ? ` "${escapeConsole(values.powod)}"` : ""}`;
+        label = "WYCISZENIE";
+      } else if (action === "unmute") {
+        command = `.unmute "${values.nick}"`;
+        label = "ZDJĘCIE WYCISZENIA";
+      } else if (action === "kill") {
+        if (!values.czas) return notice("Wpisz czas kary.");
+        command = `.kill "${values.nick}" ${values.czas}${values.powod ? ` "${escapeConsole(values.powod)}"` : ""}`;
+        label = "ZABICIE POSTACI";
+      } else if (action === "unkill") {
+        command = `.unkill "${values.nick}"`;
+        label = "ZDJĘCIE ZABICIA";
+      } else if (action === "chatlock") {
+        command = ".chatlock";
+        label = "BLOKADA CZATU";
+      } else if (action === "chatunlock") {
+        command = ".chatunlock";
+        label = "ODBLOKOWANIE CZATU";
+      } else if (action === "chatadd") {
+        command = `.chatadd "${values.nick}"`;
+        label = "DOSTĘP DO CZATU";
+      } else if (action === "chatdel") {
+        command = `.chatdel "${values.nick}"`;
+        label = "ODEBRANIE DOSTĘPU DO CZATU";
+      } else if (action === "chatlist") {
+        command = ".chatlist";
+        label = "LISTA UPRAWNIONYCH";
+      } else if (action === "reminderlist") {
+        command = ".reminderlist";
+        label = "LISTA UPOMNIEŃ";
+      } else if (action === "mutedlist") {
+        command = ".mutedlist";
+        label = "LISTA WYCISZONYCH";
       }
-      command = `.reminder "${values.nick}" "${escapeConsole(reminder.content.trim())}"`;
-      label = "UPOMNIENIE";
-    } else if (action === "mute") {
-      if (!values.czas) return notice("Wpisz czas wyciszenia.");
-      command = `.mute "${values.nick}" ${values.czas}${values.powod ? ` "${escapeConsole(values.powod)}"` : ""}`;
-      label = "WYCISZENIE";
-    } else if (action === "unmute") {
-      command = `.unmute "${values.nick}"`;
-      label = "ZDJĘCIE WYCISZENIA";
-    } else if (action === "kill") {
-      if (!values.czas) return notice("Wpisz czas kary.");
-      command = `.kill "${values.nick}" ${values.czas}${values.powod ? ` "${escapeConsole(values.powod)}"` : ""}`;
-      label = "ZABICIE POSTACI";
-    } else if (action === "unkill") {
-      command = `.unkill "${values.nick}"`;
-      label = "ZDJĘCIE ZABICIA";
-    } else if (action === "chatlock") {
-      command = ".chatlock";
-      label = "BLOKADA CZATU";
-    } else if (action === "chatunlock") {
-      command = ".chatunlock";
-      label = "ODBLOKOWANIE CZATU";
-    } else if (action === "chatadd") {
-      command = `.chatadd "${values.nick}"`;
-      label = "DOSTĘP DO CZATU";
-    } else if (action === "chatdel") {
-      command = `.chatdel "${values.nick}"`;
-      label = "ODEBRANIE DOSTĘPU DO CZATU";
-    } else if (action === "chatlist") {
-      command = ".chatlist";
-      label = "LISTA UPRAWNIONYCH";
-    } else if (action === "reminderlist") {
-      command = ".reminderlist";
-      label = "LISTA UPOMNIEŃ";
-    } else if (action === "mutedlist") {
-      command = ".mutedlist";
-      label = "LISTA WYCISZONYCH";
+      if (!command) continue;
+      if (!sendViaGameConsole(command)) return notice("Konsola gry nie jest obecnie dostępna.");
+      sentCommands.push({ label, command, nick: values.nick });
+      await recordCommand(label, command, "CONSOLE", values.nick);
     }
-    if (!command) return;
-    if (!sendViaGameConsole(command)) return notice("Konsola gry nie jest obecnie dostępna.");
-    notice(`Wysłano polecenie: ${label}.`);
-    await recordCommand(label, command, "CONSOLE", values.nick);
+    if (sentCommands.length) {
+      const label = sentCommands[0].label;
+      notice(targets.length > 1
+        ? `Wysłano polecenie „${label}” osobno do ${targets.length} graczy.`
+        : `Wysłano polecenie: ${label}.`);
+    }
   }
 
   function profileAccountId(value) {
@@ -1006,19 +1058,17 @@
         </div>
       </article>`).join("");
     target.querySelectorAll("[data-select-character]").forEach(button => button.addEventListener("click", () => {
-      state.selected = {
+      selectPlayers([{
         nick: button.dataset.selectCharacter || "",
         id: button.dataset.characterId || resolvePlayerId(button.dataset.selectCharacter) || ""
-      };
-      renderSelected();
+      }]);
       notice(`Wybrano postać ${state.selected.nick}.`);
     }));
     target.querySelectorAll("[data-character-command]").forEach(button => button.addEventListener("click", async () => {
-      state.selected = {
+      selectPlayers([{
         nick: button.dataset.characterName || "",
         id: button.dataset.characterId || resolvePlayerId(button.dataset.characterName) || ""
-      };
-      renderSelected();
+      }]);
       await executeModeratorCommand(button.dataset.characterCommand);
     }));
   }
@@ -1131,14 +1181,44 @@
   async function sendReadyCommand(id) {
     const command = readReadyCommands().find(item => item.id === id);
     if (!command) return;
-    const resolved = resolveTemplate(command.content);
-    if (resolved.missing.length) return notice(`Uzupełnij dane dla: ${resolved.missing.join(", ")}.`);
-    const sent = command.channel === "LOCAL"
-      ? await sendLocalChatMessage(resolved.content)
-      : sendViaGameConsole(resolved.content);
-    if (!sent) return notice("Nie udało się wysłać polecenia.");
-    notice(`Wysłano polecenie „${command.label}”.`);
-    await recordCommand(command.label, resolved.content, command.channel, state.selected.nick);
+    const targets = selectedPlayers();
+    const usesNick = /\{nick\}/i.test(command.content);
+    const usesCode = /\{kod\}/i.test(command.content);
+    if ((usesNick || usesCode) && !targets.length) return notice("Najpierw wybierz gracza.");
+
+    // Czat lokalny potrafi zawrzeć wiele nicków w jednej wiadomości. Kod jest
+    // jednak indywidualny, dlatego szablony z {kod} zawsze wysyłamy osobno.
+    if (command.channel === "LOCAL" && targets.length > 1 && usesNick && !usesCode) {
+      const combinedNames = targets.map(item => item.nick).join(", ");
+      const resolved = resolveTemplate(command.content, { nick: combinedNames });
+      if (resolved.missing.length) return notice(`Uzupełnij dane dla: ${resolved.missing.join(", ")}.`);
+      if (!await sendLocalChatMessage(resolved.content)) return notice("Nie udało się wysłać polecenia.");
+      for (const target of targets) {
+        await recordCommand(command.label, resolved.content, command.channel, target.nick);
+      }
+      notice(`Wysłano polecenie „${command.label}” do ${targets.length} graczy.`);
+      return;
+    }
+
+    const deliveries = (usesNick || usesCode) ? targets : [{ nick: "", id: "" }];
+    for (const target of deliveries) {
+      const participant = findParticipant(target.nick);
+      const resolved = resolveTemplate(command.content, {
+        nick: target.nick,
+        kod: normalize(participant?.verification_code)
+          || normalize(state.panel?.querySelector("[data-code]")?.value)
+          || normalize(state.active?.verification?.verification_code)
+      });
+      if (resolved.missing.length) return notice(`Uzupełnij dane dla: ${resolved.missing.join(", ")}.`);
+      const sent = command.channel === "LOCAL"
+        ? await sendLocalChatMessage(resolved.content)
+        : sendViaGameConsole(resolved.content);
+      if (!sent) return notice("Nie udało się wysłać polecenia.");
+      await recordCommand(command.label, resolved.content, command.channel, target.nick);
+    }
+    notice(deliveries.length > 1
+      ? `Wysłano polecenie „${command.label}” osobno do ${deliveries.length} graczy.`
+      : `Wysłano polecenie „${command.label}”.`);
   }
 
   function editReadyCommand(id) {
@@ -1336,14 +1416,22 @@
     const onMap = readPlayersOnCurrentMap();
     const participants = details.participants || [];
     const unresolved = participants.filter(item => !item.resolved_at);
+    const isGroupVerification = participants.length > 1;
+    const selectedNames = selectedPlayers().map(item => item.nick);
     const targetNames = unresolved.map(item => item.character_name).join(", ") || verification.target_character || "—";
     const mapPlayersCollapsed = localStorage.getItem(ACTIVE_MAP_PLAYERS_COLLAPSED_KEY) === "1";
     root.querySelector("[data-active-panel-title]").textContent = targetNames;
     root.querySelector("[data-active-panel-body]").innerHTML = `
       <section class="mc-participants">
-        <h4>${participants.length > 1 ? "Weryfikacja grupowa" : "Aktywna weryfikacja"}</h4>
+        <h4>${isGroupVerification ? "Weryfikacja grupowa" : "Aktywna weryfikacja"}</h4>
+        ${isGroupVerification && unresolved.length ? `
+          <div class="mc-group-actions">
+            <button type="button" data-select-all-participants>Wybierz wszystkich</button>
+            <button type="button" data-clear-participant-selection>Wyczyść</button>
+            <button type="button" class="danger" data-finish-all-participants>Zakończ wszystkich</button>
+          </div>` : ""}
         ${participants.map(item => `
-          <article class="mc-participant-session ${item.resolved_at ? "resolved" : ""}">
+          <article class="mc-participant-session ${item.resolved_at ? "resolved" : ""} ${selectedNames.some(name => sameNick(name, item.character_name)) ? "selected-target" : ""}">
             <div class="mc-session-grid">
               <article><small>WERYFIKOWANY GRACZ</small><strong>${escapeMarkup(item.character_name)}</strong></article>
               <article><small>MAPA STARTOWA</small><strong>${escapeMarkup(participantStartMap(item, verification))}</strong></article>
@@ -1357,6 +1445,7 @@
             <div class="mc-participant-actions">
               <span>${item.resolved_at ? "Zakończona" : presenceLabel(item.presence_status)}</span>
               ${item.resolved_at ? "" : `
+                ${isGroupVerification ? `<button type="button" data-select-participant="${escapeAttribute(item.id)}">Wybierz</button>` : ""}
                 <button type="button" data-send-participant-code="${escapeAttribute(item.id)}">Wyślij nowy kod</button>
                 <button type="button" data-send-participant-command="sendNick" data-participant-id="${escapeAttribute(item.id)}">Wyślij nick</button>
                 <button type="button" data-send-participant-command="sendScreen" data-participant-id="${escapeAttribute(item.id)}">Wyślij screen</button>
@@ -1379,6 +1468,29 @@
     root.querySelectorAll("[data-add-map-player]").forEach(button => button.addEventListener("click", async () => {
       await addParticipant({ nick: button.dataset.addMapPlayer, id: button.dataset.playerId });
     }));
+    root.querySelectorAll("[data-select-participant]").forEach(button => button.addEventListener("click", () => {
+      const participant = unresolved.find(item => String(item.id) === String(button.dataset.selectParticipant));
+      if (!participant) return;
+      selectPlayers([{
+        nick: participant.character_name,
+        id: participant.character_id || resolvePlayerId(participant.character_name) || ""
+      }], { renderActive: true });
+      notice(`Wybrano gracza ${participant.character_name}.`);
+    }));
+    root.querySelector("[data-select-all-participants]")?.addEventListener("click", () => {
+      selectPlayers(unresolved.map(item => ({
+        nick: item.character_name,
+        id: item.character_id || resolvePlayerId(item.character_name) || ""
+      })), { renderActive: true });
+      notice(`Wybrano wszystkich aktywnych uczestników (${unresolved.length}).`);
+    });
+    root.querySelector("[data-clear-participant-selection]")?.addEventListener("click", () => {
+      selectPlayers([], { renderActive: true });
+      notice("Wyczyszczono wybór uczestników.");
+    });
+    root.querySelector("[data-finish-all-participants]")?.addEventListener("click", async () => {
+      await finishAllParticipantVerifications();
+    });
     root.querySelectorAll("[data-send-participant-code]").forEach(button => button.addEventListener("click", async () => {
       await sendNewVerificationCode(button.dataset.sendParticipantCode);
     }));
@@ -1592,10 +1704,10 @@
       if (sendViaGameConsole(consoleCommand.content)) {
         await recordCommand("ROZPOCZĘCIE — UPOMNIENIE", consoleCommand.content, "CONSOLE", nick);
       }
-      state.selected = { nick, id: player.id || resolvePlayerId(nick) || "" };
-      // Po utworzeniu sesji pozostawiamy na ekranie wyłącznie kompaktowe
-      // okno aktywnej weryfikacji. Centrum można ponownie otworzyć widżetem.
-      closePanel();
+      selectPlayers([{ nick, id: player.id || resolvePlayerId(nick) || "" }]);
+      // Otwarte Centrum Moderacji pozostaje widoczne. Użytkownik może pracować
+      // równolegle w głównym panelu oraz w kompaktowym oknie aktywnej sesji.
+      if (state.panel) renderActiveSections();
       localStorage.setItem(ACTIVE_PANEL_OPEN_KEY, "1");
       showActivePanel();
       notice(`Rozpoczęto weryfikację gracza ${nick}. Kod: ${code}.`);
@@ -1669,8 +1781,7 @@
       } else {
         notice(`Dodano ${nick}, ale klient nie udostępnił konsoli do wysłania .reminder.`);
       }
-      state.selected = { nick, id: player.id || onMap?.id || "" };
-      renderSelected();
+      selectPlayers([{ nick, id: player.id || onMap?.id || "" }]);
       renderActiveSections();
       notice(`Dodano ${nick} do aktywnej weryfikacji. Kod gracza: ${code}.`);
     } catch (error) {
@@ -1814,6 +1925,7 @@
         record.verification.updated_at = endedAt;
       });
       const announced = localMessage ? await sendLocalChatMessage(localMessage) : true;
+      selectPlayers(selectedPlayers().filter(item => !sameNick(item.nick, participant.character_name)));
       if (finishedAll) {
         closeActivePanel();
         refreshActive();
@@ -1829,6 +1941,78 @@
     }
   }
 
+  async function finishAllParticipantVerifications() {
+    const verification = state.active?.verification;
+    if (!verification || verification.status !== "ACTIVE") return notice("Brak aktywnej weryfikacji.");
+    const participants = (state.active.participants || []).filter(item => !item.resolved_at);
+    if (!participants.length) return notice("Brak aktywnych uczestników.");
+    if (!confirm(`Zakończyć weryfikację wszystkich aktywnych graczy (${participants.length})?`)) return;
+
+    const finishTemplate = readStartConfig().finish;
+    const moderator = getCurrentCharacterNick();
+    const map = currentMap();
+    const announcements = participants.map(participant => ({
+      participant,
+      content: resolveTemplate(finishTemplate, {
+        nick: participant.character_name,
+        moderator
+      }).content.trim()
+    }));
+    try {
+      state.active = mutateLocalVerification(verification.id, (record, database) => {
+        const endedAt = new Date().toISOString();
+        for (const { participant, content } of announcements) {
+          const stored = (record.participants || []).find(item =>
+            String(item.id) === String(participant.id) && !item.resolved_at
+          );
+          if (!stored) continue;
+          stored.resolved_at = endedAt;
+          stored.presence_status = "RESOLVED";
+          addLocalEvent(database, record, {
+            title: `Zakończono weryfikację gracza ${stored.character_name}`,
+            eventType: "PARTICIPANT_FINISHED",
+            details: {
+              characterName: stored.character_name,
+              announcement: content,
+              moderator
+            },
+            mapId: map.id,
+            mapName: map.name,
+            participantId: stored.id
+          });
+        }
+        record.verification.status = "COMPLETED";
+        record.verification.ended_at = endedAt;
+        record.verification.updated_at = endedAt;
+        addLocalEvent(database, record, {
+          title: "Zakończono całą weryfikację grupową",
+          eventType: "VERIFICATION_FINISHED",
+          details: {
+            moderator,
+            participants: participants.map(item => item.character_name)
+          },
+          mapId: map.id,
+          mapName: map.name
+        });
+      });
+
+      let failedAnnouncements = 0;
+      for (const announcement of announcements) {
+        if (announcement.content && !await sendLocalChatMessage(announcement.content)) {
+          failedAnnouncements += 1;
+        }
+      }
+      selectPlayers([]);
+      closeActivePanel();
+      refreshActive();
+      notice(failedAnnouncements
+        ? `Zakończono weryfikację wszystkich graczy. Nie wysłano ${failedAnnouncements} komunikatów lokalnych.`
+        : `Zakończono weryfikację wszystkich graczy (${participants.length}).`);
+    } catch (error) {
+      notice(`Nie udało się zakończyć weryfikacji grupowej (${error.message}).`);
+    }
+  }
+
   function synchronizePresence() {
     const details = state.active;
     if (!details?.verification || details.verification.status !== "ACTIVE") return;
@@ -1839,12 +2023,15 @@
       if (participant.resolved_at) continue;
       const found = players.find(player => sameNick(player.nick, participant.character_name));
       const status = found ? "PRESENT" : "MISSING";
-      if (state.presence.get(participant.id) === status) continue;
+      const previousStatus = state.presence.has(participant.id)
+        ? state.presence.get(participant.id)
+        : participant.presence_status;
       state.presence.set(participant.id, status);
-      updates.push({ participantId: participant.id, status, found });
+      if (previousStatus === status) continue;
+      updates.push({ participantId: participant.id, status, previousStatus, found });
     }
     if (!updates.length) return;
-    state.active = mutateLocalVerification(details.verification.id, record => {
+    state.active = mutateLocalVerification(details.verification.id, (record, database) => {
       for (const update of updates) {
         const participant = (record.participants || []).find(item => String(item.id) === String(update.participantId));
         if (!participant) continue;
@@ -1854,6 +2041,25 @@
         participant.last_x = update.found?.x ?? null;
         participant.last_y = update.found?.y ?? null;
         participant.presence_updated_at = new Date().toISOString();
+        if (update.previousStatus === "PRESENT" && update.status === "MISSING") {
+          addLocalEvent(database, record, {
+            title: `Gracz ${participant.character_name} opuścił bieżącą mapę`,
+            eventType: "PARTICIPANT_LEFT_MAP",
+            details: { characterName: participant.character_name },
+            mapId: map.id,
+            mapName: map.name,
+            participantId: participant.id
+          });
+        } else if (update.previousStatus === "MISSING" && update.status === "PRESENT") {
+          addLocalEvent(database, record, {
+            title: `Gracz ${participant.character_name} wrócił na mapę`,
+            eventType: "PARTICIPANT_RETURNED",
+            details: { characterName: participant.character_name },
+            mapId: map.id,
+            mapName: map.name,
+            participantId: participant.id
+          });
+        }
       }
     });
     if (state.activePanel) {
@@ -2226,8 +2432,8 @@
       #${SCRIPT_ID}-panel .mc-command-tabs{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px}#${SCRIPT_ID}-panel .mc-command-tabs button{text-align:left}#${SCRIPT_ID}-panel .mc-command-tabs button.active{border-color:#61cbd0;background:#1d3850;color:#68ded9}#${SCRIPT_ID}-panel .mc-command-panes [data-command-section][hidden]{display:none!important}#${SCRIPT_ID}-panel .mc-command-panes .mc-box{margin-top:7px}#${SCRIPT_ID}-panel .mc-box,#${SCRIPT_ID}-panel .mc-block{margin-top:9px;padding:9px;border:1px solid #554825;border-radius:3px;background:#1d1b16}
       #${SCRIPT_ID}-panel h3,#${SCRIPT_ID}-panel h4{margin:0 0 8px;color:#e4c85f}#${SCRIPT_ID}-panel .mc-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px}#${SCRIPT_ID}-panel .mc-actions button{text-align:left}
       #${SCRIPT_ID}-panel summary{display:flex;justify-content:space-between;gap:10px;color:#e6cc67;font-weight:bold;cursor:pointer;list-style:none}#${SCRIPT_ID}-panel summary b{color:#938a70;font-size:10px}#${SCRIPT_ID}-panel summary::-webkit-details-marker{display:none}
-      #${SCRIPT_ID}-panel .mc-search-results{display:grid;margin-top:6px;border:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-search-results:empty{display:none}#${SCRIPT_ID}-panel .mc-character{display:flex;justify-content:space-between;align-items:center;gap:5px;padding:6px;border-bottom:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-character>span{display:grid;flex:1 1 88px;gap:1px;min-width:68px;max-width:100px;overflow-wrap:anywhere}#${SCRIPT_ID}-panel .mc-character>span strong{font-size:10.5px;line-height:1.12}#${SCRIPT_ID}-panel .mc-character>span small{font-size:9px;line-height:1.1}
-      #${SCRIPT_ID}-panel .mc-character-actions{display:flex;flex:0 0 auto;flex-wrap:nowrap;justify-content:flex-end;gap:3px;white-space:nowrap}#${SCRIPT_ID}-panel .mc-character-actions button{flex:0 0 auto;padding:3px 4px;font-size:9px;line-height:1.15;white-space:nowrap}
+      #${SCRIPT_ID}-panel .mc-search-results{display:grid;margin-top:6px;border:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-search-results:empty{display:none}#${SCRIPT_ID}-panel .mc-character{display:grid;grid-template-columns:minmax(64px,92px) minmax(0,1fr);align-items:center;gap:4px;padding:6px;border-bottom:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-character>span{display:grid;gap:1px;min-width:0;overflow:hidden}#${SCRIPT_ID}-panel .mc-character>span strong{overflow:hidden;font-size:10px;line-height:1.12;text-overflow:ellipsis;white-space:nowrap}#${SCRIPT_ID}-panel .mc-character>span small{font-size:9px;line-height:1.1}
+      #${SCRIPT_ID}-panel .mc-character-actions{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));min-width:0;gap:3px;white-space:nowrap}#${SCRIPT_ID}-panel .mc-character-actions button{width:100%;min-width:0;padding:3px 2px;overflow:hidden;font-size:clamp(7.5px,1.55vw,9px);line-height:1.15;text-overflow:ellipsis;white-space:nowrap}
       #${SCRIPT_ID}-panel .mc-ready-editor{display:grid;grid-template-columns:minmax(0,1fr) 92px auto auto;gap:6px;margin:8px 0}#${SCRIPT_ID}-panel .mc-ready-editor textarea{grid-column:1/-1;min-height:37px}#${SCRIPT_ID}-panel .mc-ready-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:8px;border-top:1px solid #4c4023}
       #${SCRIPT_ID}-panel .mc-ready-row div{display:grid;grid-template-columns:auto auto;gap:4px 8px}#${SCRIPT_ID}-panel .mc-ready-row code{grid-column:1/-1;overflow:hidden;color:#bfcf81;text-overflow:ellipsis;white-space:nowrap}#${SCRIPT_ID}-panel .mc-ready-row small{color:#e2b841}
       #${SCRIPT_ID}-panel .mc-active-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px;padding:8px;background:#11120f}#${SCRIPT_ID}-panel .mc-active-line strong{flex:1}#${SCRIPT_ID}-panel .mc-active-details[hidden]{display:none}
@@ -2272,9 +2478,10 @@
       #${SCRIPT_ID}-active-panel .mc-map-players>summary{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#68ded9;font-weight:800;cursor:pointer;user-select:none;list-style:none}#${SCRIPT_ID}-active-panel .mc-map-players>summary::-webkit-details-marker{display:none}#${SCRIPT_ID}-active-panel .mc-map-players>summary b{min-width:18px;text-align:center;color:#dce8f2;font-size:16px}
       #${SCRIPT_ID}-active-panel .mc-participant-session{padding:6px 0;border-top:1px solid #263f52}
       #${SCRIPT_ID}-active-panel .mc-participant-session:first-of-type{border-top:0}
-      #${SCRIPT_ID}-active-panel .mc-participant-session.resolved{opacity:.62}
-      #${SCRIPT_ID}-active-panel .mc-participant-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:6px;margin-top:5px}
-      #${SCRIPT_ID}-active-panel .mc-participant-actions span{margin-right:auto;color:#8ea5b5}
+      #${SCRIPT_ID}-active-panel .mc-participant-session.resolved{opacity:.62}#${SCRIPT_ID}-active-panel .mc-participant-session.selected-target{outline:1px solid #61cbd0;outline-offset:-1px;background:#0b2130}
+      #${SCRIPT_ID}-active-panel .mc-group-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin:5px 0}#${SCRIPT_ID}-active-panel .mc-group-actions button{width:100%;min-width:0;padding:6px 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      #${SCRIPT_ID}-active-panel .mc-participant-actions{display:flex;flex-wrap:nowrap;align-items:center;justify-content:flex-end;min-width:0;gap:4px;margin-top:5px}
+      #${SCRIPT_ID}-active-panel .mc-participant-actions span{flex:0 1 92px;min-width:52px;overflow:hidden;color:#8ea5b5;font-size:10px;text-overflow:ellipsis;white-space:nowrap}#${SCRIPT_ID}-active-panel .mc-participant-actions button{flex:1 1 0;min-width:0;padding:6px 3px;overflow:hidden;font-size:clamp(8px,1.15vw,11px);text-overflow:ellipsis;white-space:nowrap}
       #${SCRIPT_ID}-active-panel .mc-map-players div{display:flex;flex-wrap:wrap;gap:5px}
       @media(max-width:760px){#${SCRIPT_ID}-panel .mc-command-tabs{grid-template-columns:1fr}#${SCRIPT_ID}-panel .mc-command-fields{grid-template-columns:1fr 1fr}#${SCRIPT_ID}-panel .mc-command-fields .wide{grid-column:1/-1}#${SCRIPT_ID}-panel .mc-ready-editor{grid-template-columns:1fr}#${SCRIPT_ID}-panel .mc-session-grid,#${SCRIPT_ID}-active-panel .mc-session-grid{grid-template-columns:1fr 1fr}#${SCRIPT_ID}-active-panel .mc-active-window{left:12px}}
     `;
@@ -2355,5 +2562,5 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  console.info("[Centrum Moderacji] v3.0.0 gotowe.");
+  console.info("[Centrum Moderacji] v3.0.0 gotowe .");
 })();
