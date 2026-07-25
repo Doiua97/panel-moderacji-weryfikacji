@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.0
+// @version      3.3.4
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -19,8 +19,8 @@
 // @grant        unsafeWindow
 // @connect      www.margonem.pl
 // @connect      www.margonem.com
-// @updateURL   https://raw.githubusercontent.com/Doiua97/panel-moderacji-weryfikacji/main/panel-moderacji-weryfikacja.user.js
-// @downloadURL https://raw.githubusercontent.com/Doiua97/panel-moderacji-weryfikacji/main/panel-moderacji-weryfikacja.user.js
+// @downloadURL  https://raw.githubusercontent.com/Doiua97/panel-moderacji-weryfikacji/main/panel-moderacji-weryfikacja.user.js
+// @updateURL    https://raw.githubusercontent.com/Doiua97/panel-moderacji-weryfikacji/main/panel-moderacji-weryfikacja.user.js
 // ==/UserScript==
 
 (() => {
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.3.0";
+    window[RUNTIME_GUARD] = "3.3.4";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -54,6 +54,8 @@
     local: "{moderator} rozpoczyna weryfikację gracza {nick}. Proszę o pozostanie w grze i stosowanie się do poleceń moderatora.",
     console: ".reminder \"{nick}\" \"Rozpoczynam weryfikację. Pozostań w miejscu i wykonuj polecenia. Kod: {kod}.\"",
     sendCode: ".reminder \"{nick}\" \"Polecenie weryfikacyjne: prześlij wiadomość z kodem {kod}\"",
+    sendNick: ".reminder \"{nick}\" \"Polecenie weryfikacyjne: prześlij wiadomość zawierającą nick swojej postaci.\"",
+    sendScreen: ".reminder \"{nick}\" \"Polecenie weryfikacyjne: prześlij zrzut ekranu całego okna gry.\"",
     finish: "Weryfikacja gracza {nick} została zakończona."
   };
   const DEFAULT_READY_COMMANDS = [];
@@ -582,6 +584,9 @@
           <label>Komenda konsoli<textarea data-start-console>${escapeMarkup(start.console)}</textarea></label>
           <label>Polecenie „Wyślij kod”<textarea data-send-code-command>${escapeMarkup(start.sendCode)}</textarea></label>
           <p>W poleceniu „Wyślij kod” użyj <code>{nick}</code> oraz <code>{kod}</code>. Kod zostanie zastąpiony osobnym kodem wybranego uczestnika.</p>
+          <label>Polecenie „Wyślij nick”<textarea data-send-nick-command>${escapeMarkup(start.sendNick)}</textarea></label>
+          <label>Polecenie „Wyślij screen”<textarea data-send-screen-command>${escapeMarkup(start.sendScreen)}</textarea></label>
+          <p>Polecenia są wysyłane przez konsolę gry do uczestnika wybranego w panelu aktywnej weryfikacji. Możesz użyć: <code>{nick}</code>, <code>{moderator}</code> oraz <code>{kod}</code>.</p>
           <label>Wiadomość kończąca na czat lokalny<textarea data-finish-local>${escapeMarkup(start.finish)}</textarea></label>
           <p>W wiadomości kończącej możesz użyć: <code>{nick}</code> oraz <code>{moderator}</code>.</p>
           <button type="button" data-save-start>Zapisz</button>
@@ -602,6 +607,10 @@
 
         <details class="mc-block">
           <summary>Dziennik weryfikacji <b>ZAPIS LOKALNY</b></summary>
+          <div class="mc-journal-toolbar">
+            <span>Usuwa wszystkie zapisane weryfikacje z aktualnego świata.</span>
+            <button type="button" class="danger" data-clear-journal>Wyczyść</button>
+          </div>
           <div data-timeline></div>
         </details>
       </div>`;
@@ -652,6 +661,8 @@
         local: overlay.querySelector("[data-start-local]").value.trim(),
         console: overlay.querySelector("[data-start-console]").value.trim(),
         sendCode: overlay.querySelector("[data-send-code-command]").value.trim() || DEFAULT_START_CONFIG.sendCode,
+        sendNick: overlay.querySelector("[data-send-nick-command]").value.trim() || DEFAULT_START_CONFIG.sendNick,
+        sendScreen: overlay.querySelector("[data-send-screen-command]").value.trim() || DEFAULT_START_CONFIG.sendScreen,
         finish: overlay.querySelector("[data-finish-local]").value.trim() || DEFAULT_START_CONFIG.finish
       };
       localStorage.setItem(START_CONFIG_KEY, JSON.stringify(config));
@@ -659,6 +670,39 @@
     });
     overlay.querySelector("[data-ready-save]").addEventListener("click", saveReadyCommand);
     overlay.querySelector("[data-ready-cancel]").addEventListener("click", resetReadyEditor);
+    overlay.querySelector("[data-clear-journal]").addEventListener("click", clearVerificationJournal);
+  }
+
+  function clearVerificationJournal() {
+    if (state.active?.verification?.status === "ACTIVE") {
+      notice("Najpierw zakończ aktywną weryfikację.");
+      return;
+    }
+    const world = normalizeWorldName(currentWorldName());
+    const database = readLocalDatabase();
+    const matchingRecords = database.verifications.filter(record =>
+      normalizeWorldName(record?.verification?.world) === world
+    );
+    if (!matchingRecords.length) {
+      notice("Dziennik weryfikacji jest już pusty.");
+      return;
+    }
+    const worldLabel = currentWorldName() || "aktualnego świata";
+    if (!window.confirm(`Usunąć wszystkie weryfikacje (${matchingRecords.length}) z dziennika świata ${worldLabel}? Tej operacji nie można cofnąć.`)) {
+      return;
+    }
+    database.verifications = database.verifications.filter(record =>
+      normalizeWorldName(record?.verification?.world) !== world
+    );
+    if (!database.verifications.length) {
+      database.nextVerificationId = 1;
+      database.nextParticipantId = 1;
+      database.nextEventId = 1;
+    }
+    writeLocalDatabase(database);
+    state.journal = [];
+    renderActiveSections();
+    notice(`Wyczyszczono dziennik świata ${worldLabel}.`);
   }
 
   async function selectFromSearch() {
@@ -809,7 +853,7 @@
     target.innerHTML = `<p>Pobieranie postaci konta ${escapeMarkup(id)} ze świata ${escapeMarkup(world)}…</p>`;
     try {
       const html = await requestPublicProfile(id);
-      state.accountCharacters = parseProfileCharacters(html, world);
+      state.accountCharacters = excludeCurrentCharacter(parseProfileCharacters(html, world));
       renderAccountCharacters();
       if (!state.accountCharacters.length) {
         target.insertAdjacentHTML(
@@ -818,7 +862,7 @@
         );
       }
     } catch (error) {
-      state.accountCharacters = readVisibleAccountCharacters(id, world);
+      state.accountCharacters = excludeCurrentCharacter(readVisibleAccountCharacters(id, world));
       renderAccountCharacters();
       target.insertAdjacentHTML(
         "beforeend",
@@ -916,34 +960,33 @@
   }
 
   function readVisibleAccountCharacters(accountId, world) {
-    const characters = readPlayersOnCurrentMap()
+    return excludeCurrentCharacter(readPlayersOnCurrentMap()
       .filter(player => String(player.accountId || "") === String(accountId))
       .map(player => ({
         name: player.nick,
         id: player.id || null,
         level: player.level || null,
         world
-      }));
-    const own = readCurrentCharacter();
-    if (
-      String(own.accountId || "") === String(accountId) &&
-      own.nick &&
-      !characters.some(character => sameNick(character.name, own.nick))
-    ) {
-      characters.unshift({
-        name: own.nick,
-        id: own.id,
-        level: own.level,
-        world
-      });
-    }
-    return characters;
+      })));
+  }
+
+  function excludeCurrentCharacter(characters) {
+    const ownNick = getCurrentCharacterNick();
+    const ownId = String(getCurrentCharacterId() || "");
+    return (characters || []).filter(character => {
+      const characterNick = character?.name || character?.nick || "";
+      const characterId = String(character?.id || "");
+      if (ownNick && sameNick(characterNick, ownNick)) return false;
+      if (ownId && characterId && characterId === ownId) return false;
+      return true;
+    });
   }
 
   function renderAccountCharacters() {
     const target = state.panel?.querySelector("[data-search-results]");
     if (!target) return;
     const world = currentWorldName();
+    state.accountCharacters = excludeCurrentCharacter(state.accountCharacters);
     if (!state.accountCharacters.length) {
       target.innerHTML = `<p>Nie wykryto postaci na świecie ${escapeMarkup(world)}.</p>`;
       return;
@@ -1140,13 +1183,24 @@
               <strong>${escapeMarkup(item.character_name)}</strong>
               <span data-participant-started-at="${escapeAttribute(participantStartedAt(item, details.verification))}">${participantDuration(item, details.verification)}</span>
               <span>kod ${escapeMarkup(participantCode(item, details.verification))}</span>
-              <button type="button" data-open-active>Otwórz panel</button>
+               <button type="button" data-open-active>${state.activePanel ? "Zamknij panel" : "Otwórz panel"}</button>
             </div>`).join("")}
         </div>`;
-      summary.querySelectorAll("[data-open-active]").forEach(button => button.addEventListener("click", showActivePanel));
+      summary.querySelectorAll("[data-open-active]").forEach(button => button.addEventListener("click", toggleActivePanel));
     }
-    renderJournal(timeline, timelineMarkup(details), journalRenderSignature(details));
+    renderJournal(timeline, localJournalMarkup(state.journal), journalRenderSignature(state.journal));
     if (isActive && state.activePanel) renderActivePanel();
+  }
+
+  function syncActivePanelButtonLabel() {
+    state.panel?.querySelectorAll("[data-open-active]").forEach(button => {
+      button.textContent = state.activePanel ? "Zamknij panel" : "Otwórz panel";
+    });
+  }
+
+  function toggleActivePanel() {
+    if (state.activePanel) closeActivePanel();
+    else showActivePanel();
   }
 
   function showActivePanel() {
@@ -1181,12 +1235,14 @@
     });
     overlay.querySelector("[data-close-active]").addEventListener("click", () => closeActivePanel());
     renderActivePanel();
+    syncActivePanelButtonLabel();
   }
 
   function closeActivePanel(clearPreference = true) {
     state.activePanel?.remove();
     state.activePanel = null;
     if (clearPreference) localStorage.setItem(ACTIVE_PANEL_OPEN_KEY, "0");
+    syncActivePanelButtonLabel();
   }
 
   function renderActivePanel() {
@@ -1223,6 +1279,8 @@
               <span>${item.resolved_at ? "Zakończona" : presenceLabel(item.presence_status)}</span>
               ${item.resolved_at ? "" : `
                 <button type="button" data-send-participant-code="${escapeAttribute(item.id)}">Wyślij nowy kod</button>
+                <button type="button" data-send-participant-command="sendNick" data-participant-id="${escapeAttribute(item.id)}">Wyślij nick</button>
+                <button type="button" data-send-participant-command="sendScreen" data-participant-id="${escapeAttribute(item.id)}">Wyślij screen</button>
                 <button type="button" class="danger" data-finish-participant="${escapeAttribute(item.id)}">Zakończ weryfikację</button>`}
             </div>
           </article>`).join("")}
@@ -1238,6 +1296,9 @@
     }));
     root.querySelectorAll("[data-send-participant-code]").forEach(button => button.addEventListener("click", async () => {
       await sendNewVerificationCode(button.dataset.sendParticipantCode);
+    }));
+    root.querySelectorAll("[data-send-participant-command]").forEach(button => button.addEventListener("click", async () => {
+      await sendParticipantConfiguredCommand(button.dataset.participantId, button.dataset.sendParticipantCommand);
     }));
     root.querySelectorAll("[data-finish-participant]").forEach(button => button.addEventListener("click", async () => {
       await finishParticipantVerification(button.dataset.finishParticipant);
@@ -1551,6 +1612,39 @@
     } catch (error) {
       notice(`Nie udało się wysłać nowego kodu (${error.message}).`);
     }
+  }
+
+  async function sendParticipantConfiguredCommand(participantId, commandKey) {
+    const verification = state.active?.verification;
+    if (!verification || verification.status !== "ACTIVE") return notice("Brak aktywnej weryfikacji.");
+    const participant = (state.active.participants || []).find(item =>
+      String(item.id) === String(participantId) && !item.resolved_at
+    );
+    if (!participant) return notice("Ten uczestnik nie ma aktywnej weryfikacji.");
+    const definitions = {
+      sendNick: { label: "WYŚLIJ NICK", fallback: DEFAULT_START_CONFIG.sendNick },
+      sendScreen: { label: "WYŚLIJ SCREEN", fallback: DEFAULT_START_CONFIG.sendScreen }
+    };
+    const definition = definitions[commandKey];
+    if (!definition) return notice("Nieznany typ polecenia.");
+    const template = readStartConfig()[commandKey] || definition.fallback;
+    const resolved = resolveTemplate(template, {
+      nick: participant.character_name,
+      moderator: getCurrentCharacterNick(),
+      kod: participantCode(participant, verification),
+      czas: "",
+      powod: "",
+      tresc: ""
+    });
+    if (!resolved.content.trim() || resolved.missing.length) {
+      return notice(`Polecenie „${definition.label}” wymaga danych: ${resolved.missing.join(", ") || "treść polecenia"}.`);
+    }
+    const command = resolved.content.trim();
+    if (!sendViaGameConsole(command)) {
+      return notice("Klient nie udostępnił konsoli do wysłania polecenia.");
+    }
+    await recordCommand(definition.label, command, "CONSOLE", participant.character_name);
+    notice(`Wysłano polecenie „${definition.label}” graczowi ${participant.character_name}.`);
   }
 
   async function finishParticipantVerification(participantId) {
@@ -2002,7 +2096,7 @@
       #${SCRIPT_ID}-launcher:hover{border-color:#d0b45f;background:linear-gradient(#526a33,#28391b)}
       #${SCRIPT_ID}-launcher[data-locked="0"]{cursor:grab}#${SCRIPT_ID}-launcher i{position:absolute;right:-6px;bottom:-6px;width:18px;height:18px;border:1px solid #806a3d;border-radius:50%;background:#171713;font:10px/17px Arial}
       #${SCRIPT_ID}-panel{position:fixed;inset:0;z-index:2147482999;pointer-events:none;color:#e8dfbf;font:12px Arial,sans-serif}
-      #${SCRIPT_ID}-panel *{box-sizing:border-box}#${SCRIPT_ID}-panel .mc-window{position:absolute;right:70px;top:45px;width:min(455px,calc(100vw - 24px));max-height:min(65vh,calc(100vh - 60px));overflow:auto;overscroll-behavior:contain;padding:10px;border:1px solid #66562c;border-radius:5px;background:rgba(28,26,21,.97);box-shadow:0 14px 42px #000c;pointer-events:auto}
+      #${SCRIPT_ID}-panel *{box-sizing:border-box}#${SCRIPT_ID}-panel .mc-window{position:absolute;right:70px;top:45px;width:min(455px,calc(100vw - 24px));height:auto;max-height:none;overflow:visible;padding:10px;border:1px solid #66562c;border-radius:5px;background:rgba(28,26,21,.97);box-shadow:0 14px 42px #000c;pointer-events:auto}
       #${SCRIPT_ID}-panel .mc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding-bottom:9px;border-bottom:1px solid #5a4a27;cursor:move;user-select:none;touch-action:none}
       #${SCRIPT_ID}-panel .mc-head-actions{display:flex;align-items:center;gap:7px}
       #${SCRIPT_ID}-panel .mc-rank{padding:5px 8px;border:1px solid #31516a;border-radius:8px;background:#101e2b;color:#67d8dc;font-size:11px;font-weight:700;white-space:nowrap}
@@ -2023,7 +2117,7 @@
       #${SCRIPT_ID}-panel .mc-session-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin-top:8px}#${SCRIPT_ID}-panel .mc-session-grid article{display:grid;gap:3px;padding:7px;border:1px solid #4a3e20;background:#12130f}#${SCRIPT_ID}-panel .mc-session-grid small{color:#9f987e;font-size:9px}
       #${SCRIPT_ID}-panel .mc-participants,#${SCRIPT_ID}-panel .mc-map-players{margin-top:8px;padding:8px;border:1px solid #4a3e20}#${SCRIPT_ID}-panel .mc-participant{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-top:1px solid #3d351f}#${SCRIPT_ID}-panel .mc-participant div{display:grid}#${SCRIPT_ID}-panel .mc-participant small{color:#9d957b}
       #${SCRIPT_ID}-panel .mc-map-players div{display:flex;flex-wrap:wrap;gap:5px}#${SCRIPT_ID}-panel .mc-timeline-head{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;padding:7px;border:1px solid #4b4022}#${SCRIPT_ID}-panel .mc-timeline-head strong{flex:1}#${SCRIPT_ID}-panel .mc-timeline-head b{color:#84b849}
-      #${SCRIPT_ID}-panel .mc-timeline-events{max-height:260px;overflow:auto}#${SCRIPT_ID}-panel .mc-timeline-events article{padding:7px;border-bottom:1px solid #44391f}#${SCRIPT_ID}-panel .mc-timeline-events article div{display:flex;justify-content:space-between;gap:8px}#${SCRIPT_ID}-panel .mc-timeline-events p{margin:4px 0;color:#ddd0aa}#${SCRIPT_ID}-panel .mc-timeline-events small,#${SCRIPT_ID}-panel time{color:#948d78}
+      #${SCRIPT_ID}-panel .mc-journal-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0 2px;padding:7px;border:1px solid #44391f;background:#17150f}#${SCRIPT_ID}-panel .mc-journal-toolbar span{color:#948d78;font-size:11px}#${SCRIPT_ID}-panel .mc-timeline-events{max-height:none;overflow:visible}#${SCRIPT_ID}-panel details[data-journal-id]:not([open])>.mc-timeline-events{display:none!important}#${SCRIPT_ID}-panel .mc-timeline-events article{padding:7px;border-bottom:1px solid #44391f}#${SCRIPT_ID}-panel .mc-timeline-events article div{display:flex;justify-content:space-between;gap:8px}#${SCRIPT_ID}-panel .mc-timeline-events p{margin:4px 0;color:#ddd0aa}#${SCRIPT_ID}-panel .mc-timeline-events small,#${SCRIPT_ID}-panel time{color:#948d78}
       #${SCRIPT_ID}-notice{position:fixed;left:50%;top:70px;z-index:2147483647;max-width:560px;transform:translateX(-50%);padding:10px 14px;border:1px solid #806a3d;border-radius:4px;background:#24221e;color:#f2e4b1;box-shadow:0 5px 20px #000;font:13px Arial,sans-serif}
       #${SCRIPT_ID}-launcher{border-color:#2b6079;background:linear-gradient(145deg,#123346,#081824);color:#68ded9;font-family:Arial,sans-serif;box-shadow:0 5px 20px #000c}
       #${SCRIPT_ID}-launcher:hover{border-color:#68ded9;background:linear-gradient(145deg,#17445b,#0b2231)}
@@ -2048,22 +2142,23 @@
       #${SCRIPT_ID}-panel .mc-ready-row code{color:#75dce0}
       #${SCRIPT_ID}-panel .mc-ready-row small,#${SCRIPT_ID}-panel .mc-timeline-head b{color:#68ded9}
       #${SCRIPT_ID}-panel .mc-session-grid small,#${SCRIPT_ID}-panel .mc-participant small,#${SCRIPT_ID}-panel .mc-timeline-events small,#${SCRIPT_ID}-panel time{color:#8ea5b5}
-      #${SCRIPT_ID}-panel .mc-participants,#${SCRIPT_ID}-panel .mc-map-players,#${SCRIPT_ID}-panel .mc-timeline-head{border-color:#29465b}
+      #${SCRIPT_ID}-panel .mc-participants,#${SCRIPT_ID}-panel .mc-map-players,#${SCRIPT_ID}-panel .mc-timeline-head,#${SCRIPT_ID}-panel .mc-journal-toolbar{border-color:#29465b}#${SCRIPT_ID}-panel .mc-journal-toolbar{background:#091620}
       #${SCRIPT_ID}-notice{border-color:#2d6079;background:#0b1b28;color:#dce8f2}
-      #${SCRIPT_ID}-active-panel{position:fixed;inset:0;z-index:2147483001;pointer-events:none;color:#dce8f2;font:12px Arial,sans-serif}
-      #${SCRIPT_ID}-active-panel *{box-sizing:border-box}#${SCRIPT_ID}-active-panel .mc-active-window{position:absolute;left:calc(50% - 228px);top:55px;width:min(455px,calc(100vw - 24px));max-height:min(65vh,calc(100vh - 70px));overflow:auto;padding:10px;border:1px solid #2b465c;border-radius:5px;background:rgba(8,18,28,.97);box-shadow:0 14px 42px #000d;pointer-events:auto}
+      #${SCRIPT_ID}-active-panel{position:fixed;inset:0;z-index:2147483001;overflow:visible!important;pointer-events:none;color:#dce8f2;font:12px Arial,sans-serif}
+      #${SCRIPT_ID}-active-panel *{box-sizing:border-box}#${SCRIPT_ID}-active-panel .mc-active-window{position:absolute;left:calc(50% - 360px);top:55px;bottom:auto!important;display:block;width:min(720px,calc(100vw - 24px));height:auto!important;min-height:0!important;max-height:none!important;max-block-size:none!important;overflow:visible!important;overflow-y:visible!important;padding:8px;border:1px solid #2b465c;border-radius:5px;background:rgba(8,18,28,.97);box-shadow:0 14px 42px #000d;pointer-events:auto}
+      #${SCRIPT_ID}-active-panel [data-active-panel-body],#${SCRIPT_ID}-active-panel .mc-participants,#${SCRIPT_ID}-active-panel .mc-map-players,#${SCRIPT_ID}-active-panel .mc-participant-session{position:static;height:auto!important;min-height:0!important;max-height:none!important;max-block-size:none!important;overflow:visible!important;overflow-y:visible!important}
       #${SCRIPT_ID}-active-panel .mc-active-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding-bottom:9px;border-bottom:1px solid #29445a;cursor:move;user-select:none;touch-action:none}
       #${SCRIPT_ID}-active-panel .mc-active-head small,#${SCRIPT_ID}-active-panel h3,#${SCRIPT_ID}-active-panel h4{color:#68ded9}#${SCRIPT_ID}-active-panel h3{margin:3px 0 0;font-size:18px}#${SCRIPT_ID}-active-panel .mc-active-head button{border:0;background:none;color:#dce8f2;font-size:18px;cursor:pointer}
       #${SCRIPT_ID}-active-panel button{padding:7px 10px;border:1px solid #35556d;border-radius:3px;background:#16283a;color:#dce8f2;font:bold 12px Arial;cursor:pointer}#${SCRIPT_ID}-active-panel button:hover{border-color:#61cbd0;background:#1d3850}#${SCRIPT_ID}-active-panel button.danger{border-color:#784451;background:#45242e;color:#ff9ba8}
-      #${SCRIPT_ID}-active-panel .mc-session-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin-top:9px}#${SCRIPT_ID}-active-panel .mc-session-grid article{display:grid;gap:3px;padding:7px;border:1px solid #29465b;background:#07131d}#${SCRIPT_ID}-active-panel .mc-session-grid small{color:#8ea5b5;font-size:9px}
-      #${SCRIPT_ID}-active-panel .mc-participants,#${SCRIPT_ID}-active-panel .mc-map-players{margin-top:8px;padding:8px;border:1px solid #29465b}
-      #${SCRIPT_ID}-active-panel .mc-participant-session{padding:9px 0;border-top:1px solid #263f52}
+      #${SCRIPT_ID}-active-panel .mc-session-grid{display:grid;grid-template-columns:1.35fr 1.35fr 1.3fr .7fr .9fr;gap:4px;margin-top:6px}#${SCRIPT_ID}-active-panel .mc-session-grid article{display:grid;align-content:center;gap:2px;min-height:42px;padding:5px 6px;border:1px solid #29465b;background:#07131d}#${SCRIPT_ID}-active-panel .mc-session-grid small{color:#8ea5b5;font-size:8px}#${SCRIPT_ID}-active-panel .mc-session-grid strong{font-size:11px;overflow-wrap:anywhere}
+      #${SCRIPT_ID}-active-panel .mc-participants,#${SCRIPT_ID}-active-panel .mc-map-players{margin-top:6px;padding:6px;border:1px solid #29465b}
+      #${SCRIPT_ID}-active-panel .mc-participant-session{padding:6px 0;border-top:1px solid #263f52}
       #${SCRIPT_ID}-active-panel .mc-participant-session:first-of-type{border-top:0}
       #${SCRIPT_ID}-active-panel .mc-participant-session.resolved{opacity:.62}
-      #${SCRIPT_ID}-active-panel .mc-participant-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;margin-top:7px}
+      #${SCRIPT_ID}-active-panel .mc-participant-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:6px;margin-top:5px}
       #${SCRIPT_ID}-active-panel .mc-participant-actions span{margin-right:auto;color:#8ea5b5}
       #${SCRIPT_ID}-active-panel .mc-map-players div{display:flex;flex-wrap:wrap;gap:5px}
-      @media(max-width:760px){#${SCRIPT_ID}-panel .mc-command-tabs{grid-template-columns:1fr}#${SCRIPT_ID}-panel .mc-command-fields{grid-template-columns:1fr 1fr}#${SCRIPT_ID}-panel .mc-command-fields .wide{grid-column:1/-1}#${SCRIPT_ID}-panel .mc-ready-editor{grid-template-columns:1fr}#${SCRIPT_ID}-panel .mc-session-grid,#${SCRIPT_ID}-active-panel .mc-session-grid{grid-template-columns:1fr 1fr}}
+      @media(max-width:760px){#${SCRIPT_ID}-panel .mc-command-tabs{grid-template-columns:1fr}#${SCRIPT_ID}-panel .mc-command-fields{grid-template-columns:1fr 1fr}#${SCRIPT_ID}-panel .mc-command-fields .wide{grid-column:1/-1}#${SCRIPT_ID}-panel .mc-ready-editor{grid-template-columns:1fr}#${SCRIPT_ID}-panel .mc-session-grid,#${SCRIPT_ID}-active-panel .mc-session-grid{grid-template-columns:1fr 1fr}#${SCRIPT_ID}-active-panel .mc-active-window{left:12px}}
     `;
     document.head.appendChild(style);
   }
