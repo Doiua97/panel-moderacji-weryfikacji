@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.4
+// @version      3.3.6
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-    window[RUNTIME_GUARD] = "3.3.4";
+    window[RUNTIME_GUARD] = "3.3.6";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -656,7 +656,7 @@
     overlay.querySelectorAll("[data-command]").forEach(button => {
       button.addEventListener("click", () => executeModeratorCommand(button.dataset.command));
     });
-    overlay.querySelector("[data-save-start]").addEventListener("click", () => {
+    const saveStartConfig = (showNotice = true) => {
       const config = {
         local: overlay.querySelector("[data-start-local]").value.trim(),
         console: overlay.querySelector("[data-start-console]").value.trim(),
@@ -666,7 +666,18 @@
         finish: overlay.querySelector("[data-finish-local]").value.trim() || DEFAULT_START_CONFIG.finish
       };
       localStorage.setItem(START_CONFIG_KEY, JSON.stringify(config));
-      notice("Zapisano treści rozpoczęcia i zakończenia weryfikacji.");
+      if (showNotice) notice("Zapisano treści rozpoczęcia i zakończenia weryfikacji.");
+    };
+    overlay.querySelector("[data-save-start]").addEventListener("click", () => saveStartConfig(true));
+    overlay.querySelectorAll([
+      "[data-start-local]",
+      "[data-start-console]",
+      "[data-send-code-command]",
+      "[data-send-nick-command]",
+      "[data-send-screen-command]",
+      "[data-finish-local]"
+    ].join(",")).forEach(field => {
+      field.addEventListener("change", () => saveStartConfig(false));
     });
     overlay.querySelector("[data-ready-save]").addEventListener("click", saveReadyCommand);
     overlay.querySelector("[data-ready-cancel]").addEventListener("click", resetReadyEditor);
@@ -2096,7 +2107,7 @@
       #${SCRIPT_ID}-launcher:hover{border-color:#d0b45f;background:linear-gradient(#526a33,#28391b)}
       #${SCRIPT_ID}-launcher[data-locked="0"]{cursor:grab}#${SCRIPT_ID}-launcher i{position:absolute;right:-6px;bottom:-6px;width:18px;height:18px;border:1px solid #806a3d;border-radius:50%;background:#171713;font:10px/17px Arial}
       #${SCRIPT_ID}-panel{position:fixed;inset:0;z-index:2147482999;pointer-events:none;color:#e8dfbf;font:12px Arial,sans-serif}
-      #${SCRIPT_ID}-panel *{box-sizing:border-box}#${SCRIPT_ID}-panel .mc-window{position:absolute;right:70px;top:45px;width:min(455px,calc(100vw - 24px));height:auto;max-height:none;overflow:visible;padding:10px;border:1px solid #66562c;border-radius:5px;background:rgba(28,26,21,.97);box-shadow:0 14px 42px #000c;pointer-events:auto}
+      #${SCRIPT_ID}-panel *{box-sizing:border-box}#${SCRIPT_ID}-panel .mc-window{position:absolute;right:70px;top:45px;width:min(455px,calc(100vw - 24px));height:auto;max-height:calc(100vh - 57px);overflow-x:hidden;overflow-y:auto;padding:10px;border:1px solid #66562c;border-radius:5px;background:rgba(28,26,21,.97);box-shadow:0 14px 42px #000c;pointer-events:auto;scrollbar-width:thin;scrollbar-color:#35556d #07131d}
       #${SCRIPT_ID}-panel .mc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding-bottom:9px;border-bottom:1px solid #5a4a27;cursor:move;user-select:none;touch-action:none}
       #${SCRIPT_ID}-panel .mc-head-actions{display:flex;align-items:center;gap:7px}
       #${SCRIPT_ID}-panel .mc-rank{padding:5px 8px;border:1px solid #31516a;border-radius:8px;background:#101e2b;color:#67d8dc;font-size:11px;font-weight:700;white-space:nowrap}
