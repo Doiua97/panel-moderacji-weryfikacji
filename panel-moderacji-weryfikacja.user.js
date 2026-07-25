@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.14
+// @version      3.3.15
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-    window[RUNTIME_GUARD] = "3.3.14";
+    window[RUNTIME_GUARD] = "3.3.15";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -998,11 +998,11 @@
         <span><strong>${escapeMarkup(character.name)}</strong>${character.level ? `<small>${escapeMarkup(character.level)} lvl</small>` : ""}</span>
         <div class="mc-character-actions">
           <button type="button" data-select-character="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Wybierz</button>
+          <button type="button" class="danger" data-character-command="kill" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Kill</button>
+          <button type="button" class="danger" data-character-command="unkill" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Unkill</button>
           <button type="button" data-character-command="reminder" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Upomnienie</button>
           <button type="button" data-character-command="mute" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Wycisz</button>
           <button type="button" data-character-command="unmute" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Odcisz</button>
-          <button type="button" class="danger" data-character-command="kill" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Kill</button>
-          <button type="button" class="danger" data-character-command="unkill" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Unkill</button>
         </div>
       </article>`).join("");
     target.querySelectorAll("[data-select-character]").forEach(button => button.addEventListener("click", () => {
@@ -2226,8 +2226,8 @@
       #${SCRIPT_ID}-panel .mc-command-tabs{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px}#${SCRIPT_ID}-panel .mc-command-tabs button{text-align:left}#${SCRIPT_ID}-panel .mc-command-tabs button.active{border-color:#61cbd0;background:#1d3850;color:#68ded9}#${SCRIPT_ID}-panel .mc-command-panes [data-command-section][hidden]{display:none!important}#${SCRIPT_ID}-panel .mc-command-panes .mc-box{margin-top:7px}#${SCRIPT_ID}-panel .mc-box,#${SCRIPT_ID}-panel .mc-block{margin-top:9px;padding:9px;border:1px solid #554825;border-radius:3px;background:#1d1b16}
       #${SCRIPT_ID}-panel h3,#${SCRIPT_ID}-panel h4{margin:0 0 8px;color:#e4c85f}#${SCRIPT_ID}-panel .mc-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px}#${SCRIPT_ID}-panel .mc-actions button{text-align:left}
       #${SCRIPT_ID}-panel summary{display:flex;justify-content:space-between;gap:10px;color:#e6cc67;font-weight:bold;cursor:pointer;list-style:none}#${SCRIPT_ID}-panel summary b{color:#938a70;font-size:10px}#${SCRIPT_ID}-panel summary::-webkit-details-marker{display:none}
-      #${SCRIPT_ID}-panel .mc-search-results{display:grid;margin-top:6px;border:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-search-results:empty{display:none}#${SCRIPT_ID}-panel .mc-character{display:flex;justify-content:space-between;align-items:center;gap:7px;padding:7px;border-bottom:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-character>span{display:grid;gap:2px;min-width:0}
-      #${SCRIPT_ID}-panel .mc-character-actions{display:flex;flex:1;flex-wrap:wrap;justify-content:flex-end;gap:4px}#${SCRIPT_ID}-panel .mc-character-actions button{padding:4px 6px;font-size:10px;line-height:1.2}
+      #${SCRIPT_ID}-panel .mc-search-results{display:grid;margin-top:6px;border:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-search-results:empty{display:none}#${SCRIPT_ID}-panel .mc-character{display:flex;justify-content:space-between;align-items:center;gap:5px;padding:6px;border-bottom:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-character>span{display:grid;flex:1 1 88px;gap:1px;min-width:68px;max-width:100px;overflow-wrap:anywhere}#${SCRIPT_ID}-panel .mc-character>span strong{font-size:10.5px;line-height:1.12}#${SCRIPT_ID}-panel .mc-character>span small{font-size:9px;line-height:1.1}
+      #${SCRIPT_ID}-panel .mc-character-actions{display:flex;flex:0 0 auto;flex-wrap:nowrap;justify-content:flex-end;gap:3px;white-space:nowrap}#${SCRIPT_ID}-panel .mc-character-actions button{flex:0 0 auto;padding:3px 4px;font-size:9px;line-height:1.15;white-space:nowrap}
       #${SCRIPT_ID}-panel .mc-ready-editor{display:grid;grid-template-columns:minmax(0,1fr) 92px auto auto;gap:6px;margin:8px 0}#${SCRIPT_ID}-panel .mc-ready-editor textarea{grid-column:1/-1;min-height:37px}#${SCRIPT_ID}-panel .mc-ready-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:8px;border-top:1px solid #4c4023}
       #${SCRIPT_ID}-panel .mc-ready-row div{display:grid;grid-template-columns:auto auto;gap:4px 8px}#${SCRIPT_ID}-panel .mc-ready-row code{grid-column:1/-1;overflow:hidden;color:#bfcf81;text-overflow:ellipsis;white-space:nowrap}#${SCRIPT_ID}-panel .mc-ready-row small{color:#e2b841}
       #${SCRIPT_ID}-panel .mc-active-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px;padding:8px;background:#11120f}#${SCRIPT_ID}-panel .mc-active-line strong{flex:1}#${SCRIPT_ID}-panel .mc-active-details[hidden]{display:none}
