@@ -19,8 +19,8 @@
 // @grant        unsafeWindow
 // @connect      www.margonem.pl
 // @connect      www.margonem.com
-// @downloadURL  https://github.com/Doiua97/panel-moderacji-weryfikacji/blob/main/panel-moderacji-weryfikacja.user.js
-// @updateURL    https://github.com/Doiua97/panel-moderacji-weryfikacji/blob/main/panel-moderacji-weryfikacja.user.js
+// @updateURL   https://raw.githubusercontent.com/Doiua97/panel-moderacji-weryfikacji/main/panel-moderacji-weryfikacja.user.js
+// @downloadURL https://raw.githubusercontent.com/Doiua97/panel-moderacji-weryfikacji/main/panel-moderacji-weryfikacja.user.js
 // ==/UserScript==
 
 (() => {
