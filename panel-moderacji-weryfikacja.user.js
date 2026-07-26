@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.26
+// @version      3.3.29
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.3.26";
+  window[RUNTIME_GUARD] = "3.3.29";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -43,13 +43,7 @@
   const READY_COMMANDS_KEY = `${SCRIPT_ID}:ready-commands`;
   const START_CONFIG_KEY = `${SCRIPT_ID}:start-config`;
   const WIDGET_KEY = "MARGO_MODERATION_CENTER";
-  const REQUIRED_ACTIONS = ["Atakuj", "Pokaż profil", "Nawiguj"];
-  const STANDARD_ACTIONS = new Set([
-    "Atakuj", "Handluj", "Pocałuj", "Wyślij wiadomość", "Pokaż ekwipunek",
-    "Zaproś do przyjaciół", "Zaproś do drużyny", "Pokaż profil", "Nawiguj",
-    "Złość się", "Zmień strój",
-    "Rozpocznij weryfikację", "Dodaj do aktywnej weryfikacji"
-  ]);
+  const NATIVE_MENU_HOOK_MARK = "__margoModerationCenterPlayerMenuHook__";
   const DEFAULT_START_CONFIG = {
     local: "",
     console: "",
@@ -66,19 +60,13 @@
     active: null,
     accountCharacters: [],
     accountSearchId: "",
-    lastContextTarget: null,
-    scanTimer: 0,
+    nativeMenuHookTimer: 0,
     pollTimer: 0,
     ticker: 0,
     panel: null,
     activePanel: null,
     journal: []
   };
-
-  document.addEventListener("contextmenu", event => {
-    state.lastContextTarget = event.target instanceof Element ? event.target : null;
-    scheduleMenuScan();
-  }, true);
 
   waitForGame();
 
@@ -89,9 +77,7 @@
       createNativeWidget().then(created => {
         if (!created) createLauncher();
       });
-      const observer = new MutationObserver(scheduleMenuScan);
-      observer.observe(document.documentElement, { childList: true, subtree: true });
-      scheduleMenuScan();
+      startNativePlayerMenuIntegration();
       startSynchronization();
       if (localStorage.getItem(PANEL_OPEN_KEY) === "1") showPanel();
     };
@@ -303,14 +289,8 @@
 
   function refreshActive() {
     const details = getLocalActiveVerification();
-    const oldId = state.active?.verification?.id || "";
-    const nextId = details?.verification?.id || "";
     state.active = details;
     state.journal = getLocalJournal();
-    if (oldId !== nextId) {
-      resetEnhancedMenus();
-      scheduleMenuScan();
-    }
     renderActiveSections();
     if (details?.verification?.status === "ACTIVE" && localStorage.getItem(ACTIVE_PANEL_OPEN_KEY) === "1") {
       showActivePanel();
@@ -1864,7 +1844,7 @@
   async function startVerification(player) {
     const nick = normalize(player?.nick);
     const moderator = getCurrentCharacterNick();
-    if (!nick) return notice("Nie udało się rozpoznać wskazanego gracza.");
+    if (!isLikelyPlayerNick(nick)) return notice("Nie udało się bezpiecznie rozpoznać nicku wskazanego gracza.");
     if (!moderator) return notice("Klient gry nie udostępnił danych aktualnej postaci.");
     if (state.active?.verification?.status === "ACTIVE") return addParticipant(player);
     const code = generateCode();
@@ -1918,7 +1898,7 @@
     const verification = state.active?.verification;
     const nick = normalize(player?.nick);
     if (!verification || verification.status !== "ACTIVE") return notice("Nie ma aktywnej weryfikacji.");
-    if (!nick) return notice("Nie udało się rozpoznać gracza.");
+    if (!isLikelyPlayerNick(nick)) return notice("Nie udało się bezpiecznie rozpoznać nicku gracza.");
     if ((state.active?.participants || []).some(item => !item.resolved_at && sameNick(item.character_name, nick))) {
       return notice("Ten gracz jest już w aktywnej weryfikacji.");
     }
@@ -2228,104 +2208,81 @@
     }
   }
 
-  function scheduleMenuScan() {
-    clearTimeout(state.scanTimer);
-    state.scanTimer = setTimeout(scanMenus, 60);
+  function startNativePlayerMenuIntegration() {
+    installNativePlayerMenuHook();
+    clearInterval(state.nativeMenuHookTimer);
+    state.nativeMenuHookTimer = setInterval(installNativePlayerMenuHook, 1000);
   }
 
-  function scanMenus() {
-    for (const attack of exactTextElements("Atakuj")) {
-      const menu = findMenu(attack);
-      if (menu) enhanceMenu(menu, attack);
+  function installNativePlayerMenuHook() {
+    const others = getEngine()?.others;
+    const current = others?.addMcPanelToMenu;
+    if (!others || typeof current !== "function") return false;
+    if (current[NATIVE_MENU_HOOK_MARK]) return true;
+
+    const original = current;
+    const wrapped = function(playerId, playerNick, menu, ...rest) {
+      const result = original.apply(this, [playerId, playerNick, menu, ...rest]);
+      appendNativeVerificationAction(menu, playerId, playerNick);
+      return result;
+    };
+    Object.defineProperty(wrapped, NATIVE_MENU_HOOK_MARK, {
+      value: true,
+      configurable: false,
+      enumerable: false,
+      writable: false
+    });
+    Object.defineProperty(wrapped, "originalFunction", {
+      value: original,
+      configurable: false,
+      enumerable: false,
+      writable: false
+    });
+
+    try {
+      others.addMcPanelToMenu = wrapped;
+      return others.addMcPanelToMenu === wrapped;
+    } catch {
+      return false;
     }
   }
 
-  function resetEnhancedMenus() {
-    document.querySelectorAll("[data-mc-menu-enhanced='1']").forEach(menu => {
-      menu.querySelectorAll("[data-mc-action]").forEach(item => item.remove());
-      delete menu.dataset.mcMenuEnhanced;
-    });
+  function appendNativeVerificationAction(menu, playerId, playerNick) {
+    if (!Array.isArray(menu)) return;
+    const player = nativeMenuPlayer(playerId, playerNick);
+    if (!player.nick || sameNick(player.nick, getCurrentCharacterNick())) return;
+
+    const active = state.active?.verification?.status === "ACTIVE";
+    const label = active ? "Dodaj do aktywnej weryfikacji" : "Rozpocznij weryfikację";
+    if (menu.some(entry => Array.isArray(entry) && normalize(entry[0]) === label)) return;
+
+    menu.push([label, () => {
+      const currentPlayer = nativeMenuPlayer(player.id, player.nick);
+      if (!currentPlayer.nick) {
+        notice("Nie udało się odczytać danych wybranej postaci.");
+        return;
+      }
+      const hasActiveVerification = state.active?.verification?.status === "ACTIVE";
+      if (hasActiveVerification) addParticipant(currentPlayer);
+      else startVerification(currentPlayer);
+    }]);
   }
 
-  function enhanceMenu(menu, styleSource) {
-    if (menu.dataset.mcMenuEnhanced === "1") return;
-    menu.dataset.mcMenuEnhanced = "1";
-    const player = readPlayer(menu);
-    if (!player.nick) return;
-    const hasActiveVerification = state.active?.verification?.status === "ACTIVE";
-    const item = styleSource.cloneNode(false);
-    item.removeAttribute("id");
-    item.dataset.mcAction = hasActiveVerification ? "add" : "start";
-    item.textContent = hasActiveVerification ? "Dodaj do aktywnej weryfikacji" : "Rozpocznij weryfikację";
-    item.setAttribute("role", "button");
-    item.setAttribute("tabindex", "0");
-    item.addEventListener("click", event => {
-      event.preventDefault();
-      event.stopPropagation();
-      hasActiveVerification ? addParticipant(player) : startVerification(player);
-    });
-    item.addEventListener("keydown", event => {
-      if (event.key === "Enter" || event.key === " ") item.click();
-    });
-    menu.appendChild(item);
-  }
-
-  function readPlayer(menu) {
-    const attributes = readContextAttributes(state.lastContextTarget);
-    const nick = attributes.nick || readMenuHeader(menu);
+  function nativeMenuPlayer(playerId, playerNick) {
+    const id = String(playerId ?? "");
+    const nick = normalize(playerNick);
     const visiblePlayer = readPlayersOnCurrentMap().find(player =>
-      (attributes.id && String(player.id) === String(attributes.id)) ||
-      sameNick(player.nick, nick)
+      (id && String(player.id) === id) ||
+      (nick && sameNick(player.nick, nick))
     );
+    const resolvedNick = normalize(visiblePlayer?.nick || nick);
     return {
-      nick,
-      id: attributes.id || visiblePlayer?.id || null,
+      nick: isLikelyPlayerNick(resolvedNick) ? resolvedNick : "",
+      id: visiblePlayer?.id || id || null,
       accountId: visiblePlayer?.accountId || null,
       x: visiblePlayer?.x ?? null,
       y: visiblePlayer?.y ?? null
     };
-  }
-
-  function readMenuHeader(menu) {
-    let element = menu;
-    for (let depth = 0; element && depth < 6; depth++, element = element.parentElement) {
-      const lines = String(element.innerText || "").split(/\r?\n/).map(normalize).filter(Boolean);
-      const firstAction = lines.findIndex(line => STANDARD_ACTIONS.has(line));
-      if (firstAction > 0) {
-        const possible = lines.slice(0, firstAction).filter(line =>
-          line.length <= 80 && !STANDARD_ACTIONS.has(line) && !/^(lokalny|globalny|klanowy|handlowy)$/i.test(line)
-        );
-        if (possible.length) return possible.join(" ");
-      }
-    }
-    return "";
-  }
-
-  function readContextAttributes(target) {
-    let nick = "";
-    let id = "";
-    for (let element = target, depth = 0; element && depth < 8; element = element.parentElement, depth++) {
-      for (const attribute of element.attributes || []) {
-        if (!/^(data-|id$|name$|title$)/i.test(attribute.name) || attribute.value.length > 180) continue;
-        if (!id && /^(data-)?(player|hero|char|user)[-_]?id$/i.test(attribute.name) && /^\d{1,12}$/.test(attribute.value)) id = attribute.value;
-        if (!nick && /(^|[-_])(nick|nickname|player[-_]?name)$/i.test(attribute.name)) nick = attribute.value;
-      }
-    }
-    return { nick, id };
-  }
-
-  function exactTextElements(text) {
-    return [...document.querySelectorAll("button,[role='button'],li,a,div,span")]
-      .filter(element => normalize(element.textContent) === text && isVisible(element));
-  }
-
-  function findMenu(start) {
-    for (let element = start.parentElement, depth = 0; element && depth < 8; element = element.parentElement, depth++) {
-      const text = normalize(element.innerText);
-      const rect = element.getBoundingClientRect();
-      if (REQUIRED_ACTIONS.every(label => text.includes(label)) && rect.width >= 90 && rect.width <= 440 && rect.height <= 900) return element;
-    }
-    return null;
   }
 
   function currentMap() {
@@ -2608,8 +2565,8 @@
       #${SCRIPT_ID}-panel .mc-participants,#${SCRIPT_ID}-panel .mc-map-players,#${SCRIPT_ID}-panel .mc-timeline-head,#${SCRIPT_ID}-panel .mc-journal-toolbar{border-color:#29465b}#${SCRIPT_ID}-panel .mc-journal-toolbar{background:#091620}
       #${SCRIPT_ID}-notice{border-color:#2d6079;background:#0b1b28;color:#dce8f2}
       #${SCRIPT_ID}-active-panel{position:fixed;inset:0;z-index:2147483001;overflow:visible!important;pointer-events:none;color:#dce8f2;font:12px Arial,sans-serif}
-      #${SCRIPT_ID}-active-panel *{box-sizing:border-box}#${SCRIPT_ID}-active-panel .mc-active-window{position:absolute;left:calc(50% - 360px);top:55px;bottom:auto!important;display:block;width:min(720px,calc(100vw - 24px));height:auto!important;min-height:0!important;max-height:none!important;max-block-size:none!important;overflow:visible!important;overflow-y:visible!important;padding:8px;border:1px solid #2b465c;border-radius:5px;background:rgba(8,18,28,.97);box-shadow:0 14px 42px #000d;pointer-events:auto}
-      #${SCRIPT_ID}-active-panel [data-active-panel-body],#${SCRIPT_ID}-active-panel .mc-participants,#${SCRIPT_ID}-active-panel .mc-map-players,#${SCRIPT_ID}-active-panel .mc-participant-session{position:static;height:auto!important;min-height:0!important;max-height:none!important;max-block-size:none!important;overflow:visible!important;overflow-y:visible!important}
+      #${SCRIPT_ID}-active-panel *{box-sizing:border-box}#${SCRIPT_ID}-active-panel .mc-active-window{position:absolute;left:calc(50% - 360px);top:24px;bottom:auto!important;display:block;width:min(720px,calc(100vw - 24px));height:auto!important;min-height:0!important;max-height:calc(100vh - 48px)!important;max-block-size:calc(100vh - 48px)!important;overflow-x:hidden!important;overflow-y:auto!important;padding:8px;border:1px solid #2b465c;border-radius:5px;background:rgba(8,18,28,.97);box-shadow:0 14px 42px #000d;pointer-events:auto;scrollbar-width:thin;scrollbar-color:#35556d #07131d}
+      #${SCRIPT_ID}-active-panel [data-active-panel-body],#${SCRIPT_ID}-active-panel .mc-participants,#${SCRIPT_ID}-active-panel .mc-map-players,#${SCRIPT_ID}-active-panel .mc-participant-session{position:static;height:auto!important;min-height:0!important;max-height:none!important;max-block-size:none!important;overflow:visible!important}
       #${SCRIPT_ID}-active-panel .mc-active-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding-bottom:9px;border-bottom:1px solid #29445a;cursor:move;user-select:none;touch-action:none}
       #${SCRIPT_ID}-active-panel .mc-active-head small,#${SCRIPT_ID}-active-panel h3,#${SCRIPT_ID}-active-panel h4{color:#68ded9}#${SCRIPT_ID}-active-panel h3{margin:3px 0 0;font-size:18px}#${SCRIPT_ID}-active-panel .mc-active-head button{border:0;background:none;color:#dce8f2;font-size:18px;cursor:pointer}
       #${SCRIPT_ID}-active-panel button{padding:7px 10px;border:1px solid #35556d;border-radius:3px;background:#16283a;color:#dce8f2;font:bold 12px Arial;cursor:pointer}#${SCRIPT_ID}-active-panel button:hover{border-color:#61cbd0;background:#1d3850}#${SCRIPT_ID}-active-panel button.danger{border-color:#784451;background:#45242e;color:#ff9ba8}
@@ -2663,6 +2620,19 @@
 
   function sameNick(a, b) {
     return normalize(a).toLocaleLowerCase("pl") === normalize(b).toLocaleLowerCase("pl");
+  }
+
+  function isLikelyPlayerNick(value) {
+    const raw = String(value ?? "");
+    if (!raw || /[\r\n\t]/.test(raw)) return false;
+    const nick = normalize(raw);
+    if (nick.length < 2 || nick.length > 40) return false;
+    if (nick.split(" ").length > 5) return false;
+    if (!/^[\p{L}\p{N}][\p{L}\p{N} ._'’\-]{1,39}$/u.test(nick)) return false;
+    return !(
+      /\[\d{1,2}:\d{2}\]/.test(nick) ||
+      /\b(gracze na mapie|okno przegląd|wyloguj|dołączył|dołączyła|opuścił|opuściła|czat lokalny|czat globalny|klanowicz|weryfikacja testowa)\b/i.test(nick)
+    );
   }
 
   function normalize(value) {
