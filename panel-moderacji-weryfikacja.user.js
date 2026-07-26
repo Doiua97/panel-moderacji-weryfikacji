@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.25
+// @version      3.3.26
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.3.25";
+  window[RUNTIME_GUARD] = "3.3.26";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -963,13 +963,22 @@
         url,
         headers: {
           Accept: "text/html,application/xhtml+xml",
-          "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.7"
+          "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.7",
+          "Cache-Control": "no-cache"
         },
-        anonymous: false,
+        // Publiczny profil musi być pobierany bez sesji osoby korzystającej
+        // z panelu. W przeciwnym razie Margonem może dołączyć do dokumentu
+        // przełącznik jej własnych postaci, który nie należy do szukanego konta.
+        anonymous: true,
         timeout: 15000,
         onload: response => {
           if (response.status < 200 || response.status >= 400) {
             reject(new Error(`HTTP ${response.status || 0}`));
+            return;
+          }
+          const returnedAccountId = profileAccountId(response.finalUrl || "");
+          if (returnedAccountId && returnedAccountId !== String(accountId)) {
+            reject(new Error("serwis zwrócił profil innego konta"));
             return;
           }
           if (!String(response.responseText || "").trim()) {
@@ -999,9 +1008,10 @@
       );
     };
 
-    for (const container of documentProfile.querySelectorAll(
-      ".char-row, .charc, .charcs, [data-character-id], [data-char-id]"
-    )) {
+    // Aktualny publiczny profil Margonem udostępnia postacie jako .char-row.
+    // Klasy legacy pozostają dla zgodności, ale nie skanujemy już dowolnych
+    // elementów data-character-id z nawigacji zalogowanego użytkownika.
+    for (const container of documentProfile.querySelectorAll(".char-row, .charc, .charcs")) {
       const name = normalize(
         container.dataset.nick ||
         readField(container, ".chnick, .character-name, [name='nick'], [data-character-nick], [data-char-nick], [data-nick]")
@@ -1041,7 +1051,7 @@
       }
     }
 
-    for (const link of documentProfile.querySelectorAll('a[href*="#char_"], a[href*="profile/view,"]')) {
+    for (const link of documentProfile.querySelectorAll('a[href*="#char_"]')) {
       const href = String(link.getAttribute("href") || "");
       const hashMatch = href.match(/#char_(\d+),([\w-]+)/i);
       if (!hashMatch) continue;
