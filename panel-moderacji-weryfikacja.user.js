@@ -2450,5 +2450,5 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  console.info("[Centrum Moderacji] v3.0.0 gotowe — .");
+  console.info("[Centrum Moderacji] v3.0.0 gotowe .");
 })();
