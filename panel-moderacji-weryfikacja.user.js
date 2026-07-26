@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.30
+// @version      3.3.31
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.3.30";
+  window[RUNTIME_GUARD] = "3.3.31";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -642,6 +642,7 @@
   function bindPanel(overlay) {
     const win = overlay.querySelector(".mc-window");
     const head = overlay.querySelector(".mc-head");
+    installPanelWheelScrolling(win);
     makeMovable(win, {
       positionKey: PANEL_POSITION_KEY,
       lockKey: `${SCRIPT_ID}:never-lock-panel`,
@@ -696,6 +697,36 @@
     overlay.querySelector("[data-ready-save]").addEventListener("click", saveReadyCommand);
     overlay.querySelector("[data-ready-cancel]").addEventListener("click", resetReadyEditor);
     overlay.querySelector("[data-clear-journal]").addEventListener("click", clearVerificationJournal);
+  }
+
+  function installPanelWheelScrolling(panelWindow) {
+    if (!panelWindow) return;
+    panelWindow.addEventListener("wheel", event => {
+      event.stopPropagation();
+      if (!event.deltaY) return;
+
+      const direction = Math.sign(event.deltaY);
+      let scrollTarget = event.target instanceof Element ? event.target : panelWindow;
+      while (scrollTarget && scrollTarget !== panelWindow) {
+        const style = getComputedStyle(scrollTarget);
+        const canScroll = /(auto|scroll)/.test(style.overflowY)
+          && scrollTarget.scrollHeight > scrollTarget.clientHeight + 1;
+        const hasRoom = direction > 0
+          ? scrollTarget.scrollTop + scrollTarget.clientHeight < scrollTarget.scrollHeight - 1
+          : scrollTarget.scrollTop > 1;
+        if (canScroll && hasRoom) break;
+        scrollTarget = scrollTarget.parentElement;
+      }
+      if (!scrollTarget) scrollTarget = panelWindow;
+
+      const multiplier = event.deltaMode === 1
+        ? 16
+        : event.deltaMode === 2
+          ? panelWindow.clientHeight
+          : 1;
+      scrollTarget.scrollTop += event.deltaY * multiplier;
+      event.preventDefault();
+    }, { capture: true, passive: false });
   }
 
   function clearVerificationJournal() {
@@ -2714,5 +2745,5 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  console.info("[Centrum Moderacji] v3.0.0 gotowe .");
+  console.info("[Centrum Moderacji] v3.3.31 gotowe .");
 })();
