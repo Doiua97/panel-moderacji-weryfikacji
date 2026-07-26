@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.24
+// @version      3.3.25
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.3.24";
+  window[RUNTIME_GUARD] = "3.3.25";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -821,6 +821,9 @@
 
   async function executeModeratorCommand(action, explicitTargets = null, options = {}) {
     const needsTarget = ["reminder", "mute", "unmute", "kill", "unkill", "chatadd", "chatdel"].includes(action);
+    const fixedTime = Object.prototype.hasOwnProperty.call(options, "czas")
+      ? normalize(options.czas)
+      : null;
     const targets = needsTarget
       ? (Array.isArray(explicitTargets) ? explicitTargets : selectedPlayers())
         .map(target => ({
@@ -838,7 +841,8 @@
         nick: target.nick,
         kod: normalize(participant?.verification_code)
           || normalize(state.panel?.querySelector("[data-code]")?.value)
-          || normalize(state.active?.verification?.verification_code)
+          || normalize(state.active?.verification?.verification_code),
+        ...(fixedTime !== null ? { czas: fixedTime } : {})
       });
       let command = "";
       let label = "";
@@ -1221,7 +1225,7 @@
       + selected.map(character => `• ${character.nick}`).join("\n")
     );
     if (!confirmed) return;
-    await executeModeratorCommand(action, selected, { delayMs: 750 });
+    await executeModeratorCommand(action, selected, { delayMs: 750, czas: time });
   }
 
   function normalizeStartConfig(value = {}) {
