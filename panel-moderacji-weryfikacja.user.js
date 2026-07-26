@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.20
+// @version      3.3.24
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-    window[RUNTIME_GUARD] = "3.3.20";
+  window[RUNTIME_GUARD] = "3.3.24";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -65,6 +65,7 @@
     selectedPlayers: [],
     active: null,
     accountCharacters: [],
+    accountSearchId: "",
     lastContextTarget: null,
     scanTimer: 0,
     pollTimer: 0,
@@ -234,6 +235,7 @@
         verifier_character: data.verifierCharacter,
         target_character: data.targetCharacter,
         target_character_id: data.targetCharacterId || null,
+        target_account_id: data.targetAccountId || null,
         start_map_id: data.startMapId || null,
         start_map_name: data.startMapName || null,
         source: data.source || "OWN_INITIATIVE",
@@ -248,6 +250,7 @@
         id: participantId,
         character_name: data.targetCharacter,
         character_id: data.targetCharacterId || null,
+        account_id: data.targetAccountId || null,
         joined_at: now,
         started_at: now,
         verification_code: data.code || "",
@@ -524,8 +527,8 @@
 
         <div class="mc-selected">Wybrany gracz: <strong data-selected>nie rozpoznano</strong></div>
         <div class="mc-search">
-          <input data-search placeholder="Wpisz nick, ID konta lub link profilu">
-          <button type="button" data-select-player>Wybierz gracza</button>
+          <input data-search placeholder="ID konta lub link profilu, np. 8863242">
+          <button type="button" data-select-player>Wykryj postacie</button>
           <button type="button" data-clear-player>Wyczyść</button>
         </div>
         <div class="mc-search-results" data-search-results></div>
@@ -627,6 +630,7 @@
     overlay.querySelector("[data-clear-player]").addEventListener("click", () => {
       selectPlayers([]);
       state.accountCharacters = [];
+      state.accountSearchId = "";
       const input = overlay.querySelector("[data-search]");
       const results = overlay.querySelector("[data-search-results]");
       if (input) input.value = "";
@@ -703,13 +707,14 @@
   async function selectFromSearch() {
     const input = state.panel?.querySelector("[data-search]");
     const value = normalize(input?.value);
-    if (!value) return notice("Wpisz nick, ID konta lub link profilu.");
+    if (!value) return notice("Wpisz ID konta albo link do profilu.");
     const accountId = profileAccountId(value);
-    if (accountId) {
-      await detectAccountCharacters(accountId);
+    if (!accountId) {
+      notice("Wpisz poprawne ID konta albo pełny link do profilu Margonem.");
+      input?.focus();
       return;
     }
-    selectPlayers([{ nick: value, id: resolvePlayerId(value) || "" }]);
+    await detectAccountCharacters(accountId);
   }
 
   function renderSelected() {
@@ -814,12 +819,20 @@
     return { content: resolved, missing: [...new Set(missing)] };
   }
 
-  async function executeModeratorCommand(action) {
+  async function executeModeratorCommand(action, explicitTargets = null, options = {}) {
     const needsTarget = ["reminder", "mute", "unmute", "kill", "unkill", "chatadd", "chatdel"].includes(action);
-    const targets = needsTarget ? selectedPlayers() : [{ nick: "", id: "" }];
+    const targets = needsTarget
+      ? (Array.isArray(explicitTargets) ? explicitTargets : selectedPlayers())
+        .map(target => ({
+          nick: normalize(target?.nick || target?.name),
+          id: target?.id || resolvePlayerId(target?.nick || target?.name) || ""
+        }))
+        .filter(target => target.nick)
+      : [{ nick: "", id: "" }];
     if (needsTarget && !targets.length) return notice("Najpierw wybierz gracza.");
     const sentCommands = [];
-    for (const target of targets) {
+    for (let targetIndex = 0; targetIndex < targets.length; targetIndex += 1) {
+      const target = targets[targetIndex];
       const participant = findParticipant(target.nick);
       const values = panelValues({
         nick: target.nick,
@@ -876,6 +889,9 @@
       if (!sendViaGameConsole(command)) return notice("Konsola gry nie jest obecnie dostępna.");
       sentCommands.push({ label, command, nick: values.nick });
       await recordCommand(label, command, "CONSOLE", values.nick);
+      if (Number(options.delayMs) > 0 && targetIndex < targets.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, Number(options.delayMs)));
+      }
     }
     if (sentCommands.length) {
       const label = sentCommands[0].label;
@@ -887,15 +903,23 @@
 
   function profileAccountId(value) {
     const text = String(value || "").trim();
+    if (/^\d{3,12}$/.test(text)) return text;
     const profileMatch = text.match(/profile\/view,(\d{3,12})/i);
     if (profileMatch) return profileMatch[1];
-    return /^\d{3,12}$/.test(text) ? text : "";
+    const legacyMatch = text.match(/[?&](?:id|user_id)=(\d{3,12})(?:&|$)/i);
+    return legacyMatch ? legacyMatch[1] : "";
   }
 
   async function detectAccountCharacters(id) {
     const target = state.panel?.querySelector("[data-search-results]");
     if (!target) return;
+    const fetchButton = state.panel?.querySelector("[data-select-player]");
     const world = currentWorldName();
+    state.accountSearchId = String(id || "");
+    if (fetchButton) {
+      fetchButton.disabled = true;
+      fetchButton.textContent = "Pobieranie…";
+    }
     target.innerHTML = `<p>Pobieranie postaci konta ${escapeMarkup(id)} ze świata ${escapeMarkup(world)}…</p>`;
     try {
       const html = await requestPublicProfile(id);
@@ -914,6 +938,11 @@
         "beforeend",
         `<p class="mc-muted">Nie udało się odczytać publicznego profilu (${escapeMarkup(error?.message || "błąd połączenia")}). Pokazano wyłącznie pasujące postacie aktualnie widoczne w kliencie.</p>`
       );
+    } finally {
+      if (fetchButton) {
+        fetchButton.disabled = false;
+        fetchButton.textContent = "Wykryj postacie";
+      }
     }
   }
 
@@ -935,7 +964,7 @@
         anonymous: false,
         timeout: 15000,
         onload: response => {
-          if (response.status < 200 || response.status >= 300) {
+          if (response.status < 200 || response.status >= 400) {
             reject(new Error(`HTTP ${response.status || 0}`));
             return;
           }
@@ -955,54 +984,124 @@
     const documentProfile = new DOMParser().parseFromString(String(html || ""), "text/html");
     const requested = normalizeWorldName(requestedWorld);
     const characters = [];
-    const characterNodes = [
-      ...documentProfile.querySelectorAll(".char-row, .charc, .charcs, [data-character-id], [data-char-id]")
-    ];
-    for (const node of characterNodes) {
-      const value = selector => {
-        const elements = [
-          ...(node.matches(selector) ? [node] : []),
-          ...node.querySelectorAll(selector)
-        ];
-        const formField = elements.find(element => normalize(element.value || element.getAttribute("value")));
-        const element = formField || elements[0];
-        return normalize(
-          element?.value ||
-          element?.getAttribute("value") ||
-          element?.textContent
-        );
-      };
-      const world = normalize(
-        node.dataset.world ||
-        value("input.chworld, .chworld, [name='world'], [data-character-world], [data-char-world], [data-world]")
+
+    const readField = (container, selector) => {
+      const element = container?.querySelector?.(selector);
+      if (!element) return "";
+      return normalize(
+        ("value" in element ? element.value : "") ||
+        element.getAttribute?.("value") ||
+        element.textContent
       );
-      if (!world || normalizeWorldName(world) !== requested) continue;
+    };
+
+    for (const container of documentProfile.querySelectorAll(
+      ".char-row, .charc, .charcs, [data-character-id], [data-char-id]"
+    )) {
       const name = normalize(
-        node.dataset.nick ||
-        value("input.chnick, .chnick, .character-name, [name='nick'], [data-character-nick], [data-char-nick], [data-nick]")
+        container.dataset.nick ||
+        readField(container, ".chnick, .character-name, [name='nick'], [data-character-nick], [data-char-nick], [data-nick]")
       );
-      if (!name) continue;
-      const character = {
+      const world = normalize(
+        container.dataset.world ||
+        readField(container, ".chworld, [name='world'], [data-character-world], [data-char-world], [data-world]")
+      );
+      if (!name || !world) continue;
+      characters.push({
         name,
+        world,
         id: normalize(
-          node.dataset.id ||
-          value("input.chid, .chid, [name='char_id'], [name='character_id'], [data-character-id], [data-char-id], [data-id]")
-        ) || null,
-        level: finiteOrNull(
-          node.dataset.lvl ||
-          value("input.chlvl, [name='lvl'], [name='level'], [data-character-level], [data-char-level], [data-lvl], .chlvl")
+          container.dataset.id ||
+          readField(container, ".chid, [name='char_id'], [name='character_id'], [data-character-id], [data-char-id], [data-id]")
         ),
-        world
-      };
-      const dedupeKey = character.id || character.name.toLocaleLowerCase("pl");
-      if (!characters.some(existing => (existing.id || existing.name.toLocaleLowerCase("pl")) === dedupeKey)) {
-        characters.push(character);
+        level: normalize(
+          container.dataset.lvl ||
+          readField(container, ".chlvl, [name='lvl'], [name='level'], [data-character-level], [data-char-level], [data-lvl]")
+        )
+      });
+    }
+
+    if (!characters.length) {
+      for (const worldElement of documentProfile.querySelectorAll(".chworld")) {
+        const container = worldElement.closest(".charc, .charcs") || worldElement.parentElement;
+        if (!container) continue;
+        const name = readField(container, ".chnick");
+        const world = normalize(("value" in worldElement ? worldElement.value : "") || worldElement.textContent);
+        if (!name || !world) continue;
+        characters.push({
+          name,
+          world,
+          id: readField(container, ".chid"),
+          level: readField(container, ".chlvl")
+        });
       }
     }
-    return characters.sort((left, right) =>
+
+    for (const link of documentProfile.querySelectorAll('a[href*="#char_"], a[href*="profile/view,"]')) {
+      const href = String(link.getAttribute("href") || "");
+      const hashMatch = href.match(/#char_(\d+),([\w-]+)/i);
+      if (!hashMatch) continue;
+      const container = link.closest(".charc, .charcs, li, article, section, div") || link;
+      const name = readField(container, ".chnick")
+        || normalize(link.getAttribute("data-nick"))
+        || normalize(link.textContent);
+      if (!name || name.length > 80) continue;
+      characters.push({
+        name,
+        world: hashMatch[2],
+        id: hashMatch[1],
+        level: readField(container, ".chlvl")
+      });
+    }
+
+    if (!characters.length) {
+      const source = String(html || "");
+      const objectPattern = /["']nick["']\s*:\s*["']([^"']{1,80})["'][\s\S]{0,400}?["']world(?:name)?["']\s*:\s*["']([\w-]{2,40})["']/gi;
+      const reversedPattern = /["']world(?:name)?["']\s*:\s*["']([\w-]{2,40})["'][\s\S]{0,400}?["']nick["']\s*:\s*["']([^"']{1,80})["']/gi;
+      let match;
+      while ((match = objectPattern.exec(source))) {
+        characters.push({
+          name: decodeProfileText(match[1]),
+          world: match[2],
+          id: "",
+          level: ""
+        });
+      }
+      while ((match = reversedPattern.exec(source))) {
+        characters.push({
+          name: decodeProfileText(match[2]),
+          world: match[1],
+          id: "",
+          level: ""
+        });
+      }
+    }
+
+    const seen = new Set();
+    return characters
+      .filter(character => character.name && normalizeWorldName(character.world) === requested)
+      .filter(character => {
+        const key = `${normalizeWorldName(character.world)}\u0000${normalize(character.name).toLocaleLowerCase("pl")}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map(character => ({
+        name: normalize(character.name),
+        id: normalize(character.id) || null,
+        level: finiteOrNull(character.level),
+        world: normalize(character.world)
+      }))
+      .sort((left, right) =>
       Number(right.level || 0) - Number(left.level || 0) ||
       left.name.localeCompare(right.name, "pl")
     );
+  }
+
+  function decodeProfileText(value) {
+    const textarea = document.createElement("textarea");
+    textarea.innerHTML = String(value || "");
+    return normalize(textarea.value);
   }
 
   function readVisibleAccountCharacters(accountId, world) {
@@ -1037,32 +1136,92 @@
       target.innerHTML = `<p>Nie wykryto postaci na świecie ${escapeMarkup(world)}.</p>`;
       return;
     }
-    target.innerHTML = state.accountCharacters.map(character => `
-      <article class="mc-character">
-        <span><strong>${escapeMarkup(character.name)}</strong>${character.level ? `<small>${escapeMarkup(character.level)} lvl</small>` : ""}</span>
-        <div class="mc-character-actions">
-          <button type="button" data-select-character="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Wybierz</button>
-          <button type="button" class="danger" data-character-command="kill" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Kill</button>
-          <button type="button" class="danger" data-character-command="unkill" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Unkill</button>
-          <button type="button" data-character-command="reminder" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Upomnienie</button>
-          <button type="button" data-character-command="mute" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Wycisz</button>
-          <button type="button" data-character-command="unmute" data-character-name="${escapeAttribute(character.name)}" data-character-id="${escapeAttribute(character.id || "")}">Odcisz</button>
-        </div>
-      </article>`).join("");
-    target.querySelectorAll("[data-select-character]").forEach(button => button.addEventListener("click", () => {
-      selectPlayers([{
-        nick: button.dataset.selectCharacter || "",
-        id: button.dataset.characterId || resolvePlayerId(button.dataset.selectCharacter) || ""
-      }]);
-      notice(`Wybrano postać ${state.selected.nick}.`);
-    }));
-    target.querySelectorAll("[data-character-command]").forEach(button => button.addEventListener("click", async () => {
-      selectPlayers([{
-        nick: button.dataset.characterName || "",
-        id: button.dataset.characterId || resolvePlayerId(button.dataset.characterName) || ""
-      }]);
-      await executeModeratorCommand(button.dataset.characterCommand);
-    }));
+    target.innerHTML = `
+      <div class="mc-account-result-head">
+        Znaleziono ${state.accountCharacters.length} postaci konta ${escapeMarkup(state.accountSearchId)}
+        na świecie ${escapeMarkup(world)}. Zaznacz postacie, na których chcesz wykonać operację.
+      </div>
+      <div class="mc-account-character-list">
+        ${state.accountCharacters.map((character, index) => `
+          <label class="mc-account-character">
+            <input
+              type="checkbox"
+              data-account-character
+              data-character-index="${index}"
+              value="${escapeAttribute(character.name)}"
+              checked
+            >
+            <span>
+              <strong>${escapeMarkup(character.name)}</strong>
+              <small>${[
+                character.level ? `${character.level} lvl` : "",
+                character.id ? `ID postaci ${character.id}` : ""
+              ].filter(Boolean).map(escapeMarkup).join(" · ")}</small>
+            </span>
+          </label>`).join("")}
+      </div>
+      <div class="mc-account-batch" data-account-batch hidden>
+        <span data-account-selection-count></span>
+        <button type="button" class="danger" data-account-batch-command="kill">Zabij zaznaczone postacie</button>
+        <button type="button" class="danger" data-account-batch-command="unkill">Zdejmij zabicie z zaznaczonych postaci</button>
+      </div>`;
+
+    target.querySelectorAll("[data-account-character]").forEach(input => {
+      input.addEventListener("change", syncAccountCharacterSelection);
+    });
+    target.querySelectorAll("[data-account-batch-command]").forEach(button => {
+      button.addEventListener("click", () => executeAccountBatch(button.dataset.accountBatchCommand));
+    });
+    syncAccountCharacterSelection();
+  }
+
+  function selectedAccountCharacters() {
+    const target = state.panel?.querySelector("[data-search-results]");
+    if (!target) return [];
+    return [...target.querySelectorAll("[data-account-character]:checked")]
+      .map(input => state.accountCharacters[Number(input.dataset.characterIndex)])
+      .filter(Boolean)
+      .map(character => ({
+        nick: character.name,
+        id: character.id || resolvePlayerId(character.name) || ""
+      }));
+  }
+
+  function syncAccountCharacterSelection() {
+    const selected = selectedAccountCharacters();
+    selectPlayers(selected);
+    const batch = state.panel?.querySelector("[data-account-batch]");
+    const count = state.panel?.querySelector("[data-account-selection-count]");
+    if (count) count.textContent = `Zaznaczono: ${selected.length}`;
+    if (batch) batch.hidden = selected.length === 0;
+  }
+
+  async function executeAccountBatch(action) {
+    const selected = selectedAccountCharacters();
+    if (selected.length === 0) {
+      notice("Zaznacz co najmniej jedną postać.");
+      return;
+    }
+    const time = normalize(state.panel?.querySelector("[data-time]")?.value);
+    if (action === "kill" && !time) {
+      notice("Wpisz czas kary w polu „Czas”.");
+      state.panel?.querySelector("[data-time]")?.focus();
+      return;
+    }
+    if (action === "kill" && !/^[\w.+-]+$/u.test(time)) {
+      notice("Czas może zawierać tylko cyfry, litery oraz znaki: . + -");
+      state.panel?.querySelector("[data-time]")?.focus();
+      return;
+    }
+    const operation = action === "kill"
+      ? `wykonać .kill na czas ${time}`
+      : "wykonać .unkill";
+    const confirmed = window.confirm(
+      `Czy na pewno chcesz ${operation} dla ${selected.length} zaznaczonych postaci?\n\n`
+      + selected.map(character => `• ${character.nick}`).join("\n")
+    );
+    if (!confirmed) return;
+    await executeModeratorCommand(action, selected, { delayMs: 750 });
   }
 
   function normalizeStartConfig(value = {}) {
@@ -1443,6 +1602,11 @@
                     data-select-participant="${escapeAttribute(item.id)}"
                     data-participant-selected="${selectedNames.some(name => sameNick(name, item.character_name)) ? "1" : "0"}"
                   >${selectedNames.some(name => sameNick(name, item.character_name)) ? "Wyczyść" : "Wybierz"}</button>` : ""}
+                <button
+                  type="button"
+                  data-load-participant-account="${escapeAttribute(item.id)}"
+                  title="Otwórz w Centrum Moderacji postacie tego konta"
+                >Pobierz ID konta</button>
                 <button type="button" data-send-participant-code="${escapeAttribute(item.id)}">Wyślij nowy kod</button>
                 <button type="button" data-send-participant-command="sendNick" data-participant-id="${escapeAttribute(item.id)}">Wyślij nick</button>
                 <button type="button" data-send-participant-command="sendScreen" data-participant-id="${escapeAttribute(item.id)}">Wyślij screen</button>
@@ -1453,7 +1617,11 @@
       <details class="mc-map-players" data-map-players-section ${mapPlayersCollapsed ? "" : "open"}>
         <summary>Gracze na bieżącej mapie <b data-map-players-toggle-label>${mapPlayersCollapsed ? "+" : "−"}</b></summary>
         <div>${onMap.filter(player => !findParticipant(player.nick)).map(player =>
-          `<button data-add-map-player="${escapeAttribute(player.nick)}" data-player-id="${escapeAttribute(player.id)}">+ ${escapeMarkup(player.nick)}</button>`
+          `<button
+            data-add-map-player="${escapeAttribute(player.nick)}"
+            data-player-id="${escapeAttribute(player.id)}"
+            data-player-account-id="${escapeAttribute(player.accountId || "")}"
+          >+ ${escapeMarkup(player.nick)}</button>`
         ).join("") || "<small>Brak innych graczy do dodania.</small>"}</div>
       </details>`;
     const mapPlayersSection = root.querySelector("[data-map-players-section]");
@@ -1463,7 +1631,11 @@
       if (label) label.textContent = mapPlayersSection.open ? "−" : "+";
     });
     root.querySelectorAll("[data-add-map-player]").forEach(button => button.addEventListener("click", async () => {
-      await addParticipant({ nick: button.dataset.addMapPlayer, id: button.dataset.playerId });
+      await addParticipant({
+        nick: button.dataset.addMapPlayer,
+        id: button.dataset.playerId,
+        accountId: button.dataset.playerAccountId || null
+      });
     }));
     root.querySelectorAll("[data-select-participant]").forEach(button => button.addEventListener("click", () => {
       const participant = unresolved.find(item => String(item.id) === String(button.dataset.selectParticipant));
@@ -1497,6 +1669,9 @@
     });
     root.querySelectorAll("[data-send-participant-code]").forEach(button => button.addEventListener("click", async () => {
       await sendNewVerificationCode(button.dataset.sendParticipantCode);
+    }));
+    root.querySelectorAll("[data-load-participant-account]").forEach(button => button.addEventListener("click", async () => {
+      await openParticipantAccountSearch(button.dataset.loadParticipantAccount);
     }));
     root.querySelectorAll("[data-send-participant-command]").forEach(button => button.addEventListener("click", async () => {
       await sendParticipantConfiguredCommand(button.dataset.participantId, button.dataset.sendParticipantCommand);
@@ -1681,6 +1856,7 @@
     const code = generateCode();
     if (state.panel) state.panel.querySelector("[data-code]").value = code;
     const map = currentMap();
+    const accountId = player?.accountId || resolvePlayerAccountId(nick, player?.id);
     const config = readStartConfig();
     const values = { nick, moderator, kod: code, czas: "", powod: "", tresc: "" };
     const local = resolveTemplate(config.local, values);
@@ -1696,6 +1872,7 @@
         verifierCharacter: moderator,
         targetCharacter: nick,
         targetCharacterId: player.id || resolvePlayerId(nick),
+        targetAccountId: accountId,
         startMapId: map.id,
         startMapName: map.name,
         source: "OWN_INITIATIVE",
@@ -1732,6 +1909,7 @@
       return notice("Ten gracz jest już w aktywnej weryfikacji.");
     }
     const map = currentMap();
+    const accountId = player?.accountId || resolvePlayerAccountId(nick, player?.id);
     const moderator = getCurrentCharacterNick();
     const code = generateCode();
     const config = readStartConfig();
@@ -1755,6 +1933,7 @@
           id: String(database.nextParticipantId++),
           character_name: nick,
           character_id: player.id || resolvePlayerId(nick) || null,
+          account_id: accountId || null,
           joined_at: joinedAt,
           started_at: joinedAt,
           verification_code: code,
@@ -1785,6 +1964,33 @@
       const label = error.message === "PARTICIPANT_ALREADY_ADDED" ? "Ten gracz jest już w aktywnej weryfikacji." : error.message;
       notice(`Nie udało się dodać gracza (${label}).`);
     }
+  }
+
+  async function openParticipantAccountSearch(participantId) {
+    const verification = state.active?.verification;
+    const participant = (state.active?.participants || []).find(item =>
+      String(item.id) === String(participantId)
+    );
+    if (!verification || verification.status !== "ACTIVE" || !participant) {
+      notice("Nie znaleziono uczestnika aktywnej weryfikacji.");
+      return;
+    }
+    const accountId = profileAccountId(participant.account_id);
+    if (!accountId) {
+      notice(`Sesja gracza ${participant.character_name} nie zawiera zapisanego ID konta. Funkcja będzie dostępna dla nowo rozpoczętych sesji.`);
+      return;
+    }
+    if (!state.panel) showPanel();
+    const input = state.panel?.querySelector("[data-search]");
+    const panelWindow = state.panel?.querySelector(".mc-window");
+    if (!input) {
+      notice("Nie udało się otworzyć wyszukiwarki konta.");
+      return;
+    }
+    input.value = accountId;
+    panelWindow?.scrollTo({ top: 0, behavior: "smooth" });
+    await detectAccountCharacters(accountId);
+    state.panel?.querySelector("[data-search-results]")?.scrollIntoView({ block: "nearest" });
   }
 
   async function sendNewVerificationCode(participantId) {
@@ -2052,9 +2258,17 @@
 
   function readPlayer(menu) {
     const attributes = readContextAttributes(state.lastContextTarget);
+    const nick = attributes.nick || readMenuHeader(menu);
+    const visiblePlayer = readPlayersOnCurrentMap().find(player =>
+      (attributes.id && String(player.id) === String(attributes.id)) ||
+      sameNick(player.nick, nick)
+    );
     return {
-      nick: attributes.nick || readMenuHeader(menu),
-      id: attributes.id || null
+      nick,
+      id: attributes.id || visiblePlayer?.id || null,
+      accountId: visiblePlayer?.accountId || null,
+      x: visiblePlayer?.x ?? null,
+      y: visiblePlayer?.y ?? null
     };
   }
 
@@ -2154,6 +2368,14 @@
   function resolvePlayerId(nick) {
     const player = readPlayersOnCurrentMap().find(item => sameNick(item.nick, nick));
     return player?.id || null;
+  }
+
+  function resolvePlayerAccountId(nick, characterId = null) {
+    const player = readPlayersOnCurrentMap().find(item =>
+      (characterId && String(item.id) === String(characterId)) ||
+      sameNick(item.nick, nick)
+    );
+    return player?.accountId || null;
   }
 
   function readAccountId(data, source = null) {
@@ -2326,6 +2548,18 @@
       #${SCRIPT_ID}-panel summary{display:flex;justify-content:space-between;gap:10px;color:#e6cc67;font-weight:bold;cursor:pointer;list-style:none}#${SCRIPT_ID}-panel summary b{color:#938a70;font-size:10px}#${SCRIPT_ID}-panel summary::-webkit-details-marker{display:none}
       #${SCRIPT_ID}-panel .mc-search-results{display:grid;margin-top:6px;border:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-search-results:empty{display:none}#${SCRIPT_ID}-panel .mc-character{display:grid;grid-template-columns:minmax(64px,92px) minmax(0,1fr);align-items:center;gap:4px;padding:6px;border-bottom:1px solid #4c4023}#${SCRIPT_ID}-panel .mc-character>span{display:grid;gap:1px;min-width:0;overflow:hidden}#${SCRIPT_ID}-panel .mc-character>span strong{overflow:hidden;font-size:10px;line-height:1.12;text-overflow:ellipsis;white-space:nowrap}#${SCRIPT_ID}-panel .mc-character>span small{font-size:9px;line-height:1.1}
       #${SCRIPT_ID}-panel .mc-character-actions{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));min-width:0;gap:3px;white-space:nowrap}#${SCRIPT_ID}-panel .mc-character-actions button{width:100%;min-width:0;padding:3px 2px;overflow:hidden;font-size:clamp(7.5px,1.55vw,9px);line-height:1.15;text-overflow:ellipsis;white-space:nowrap}
+      #${SCRIPT_ID}-panel .mc-account-result-head{padding:7px;border-bottom:1px solid #4c4023;color:#aebdca;font-size:10px;line-height:1.35}
+      #${SCRIPT_ID}-panel .mc-account-character-list{display:grid}
+      #${SCRIPT_ID}-panel .mc-account-character{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:8px;padding:6px 7px;border-bottom:1px solid #4c4023;cursor:pointer}
+      #${SCRIPT_ID}-panel .mc-account-character:hover{background:#132536}
+      #${SCRIPT_ID}-panel .mc-account-character input{width:auto;margin:0;accent-color:#61cbd0}
+      #${SCRIPT_ID}-panel .mc-account-character span{display:grid;gap:2px;min-width:0}
+      #${SCRIPT_ID}-panel .mc-account-character strong{overflow:hidden;color:#dce8f2;font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+      #${SCRIPT_ID}-panel .mc-account-character small{color:#8ea5b5;font-size:9px}
+      #${SCRIPT_ID}-panel .mc-account-batch{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:7px;background:#091620}
+      #${SCRIPT_ID}-panel .mc-account-batch[hidden]{display:none!important}
+      #${SCRIPT_ID}-panel .mc-account-batch span{grid-column:1/-1;color:#9fb5c4;font-size:10px}
+      #${SCRIPT_ID}-panel .mc-account-batch button{width:100%;min-width:0;padding:6px 4px;font-size:9px;line-height:1.2}
       #${SCRIPT_ID}-panel .mc-ready-editor{display:grid;grid-template-columns:minmax(0,1fr) 92px auto auto;gap:6px;margin:8px 0}#${SCRIPT_ID}-panel .mc-ready-editor textarea{grid-column:1/-1;min-height:37px}#${SCRIPT_ID}-panel .mc-ready-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:8px;border-top:1px solid #4c4023}
       #${SCRIPT_ID}-panel .mc-ready-row div{display:grid;grid-template-columns:auto auto;gap:4px 8px}#${SCRIPT_ID}-panel .mc-ready-row code{grid-column:1/-1;overflow:hidden;color:#bfcf81;text-overflow:ellipsis;white-space:nowrap}#${SCRIPT_ID}-panel .mc-ready-row small{color:#e2b841}
       #${SCRIPT_ID}-panel .mc-active-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px;padding:8px;background:#11120f}#${SCRIPT_ID}-panel .mc-active-line strong{flex:1}#${SCRIPT_ID}-panel .mc-active-details[hidden]{display:none}
@@ -2353,7 +2587,7 @@
       #${SCRIPT_ID}-panel .mc-note{border-color:#53cbd0;background:#0b1b28;color:#9eb5c4}
       #${SCRIPT_ID}-panel .mc-box,#${SCRIPT_ID}-panel .mc-block{border-color:#29465b;background:#0d1b27}
       #${SCRIPT_ID}-panel .mc-active-line,#${SCRIPT_ID}-panel .mc-session-grid article{border-color:#29465b;background:#07131d}
-      #${SCRIPT_ID}-panel .mc-search-results,#${SCRIPT_ID}-panel .mc-character,#${SCRIPT_ID}-panel .mc-ready-row,#${SCRIPT_ID}-panel .mc-participant,#${SCRIPT_ID}-panel .mc-timeline-events article{border-color:#263f52}
+      #${SCRIPT_ID}-panel .mc-search-results,#${SCRIPT_ID}-panel .mc-character,#${SCRIPT_ID}-panel .mc-account-result-head,#${SCRIPT_ID}-panel .mc-account-character,#${SCRIPT_ID}-panel .mc-ready-row,#${SCRIPT_ID}-panel .mc-participant,#${SCRIPT_ID}-panel .mc-timeline-events article{border-color:#263f52}
       #${SCRIPT_ID}-panel .mc-ready-row code{color:#75dce0}
       #${SCRIPT_ID}-panel .mc-ready-row small,#${SCRIPT_ID}-panel .mc-timeline-head b{color:#68ded9}
       #${SCRIPT_ID}-panel .mc-session-grid small,#${SCRIPT_ID}-panel .mc-participant small,#${SCRIPT_ID}-panel .mc-timeline-events small,#${SCRIPT_ID}-panel time{color:#8ea5b5}
@@ -2450,5 +2684,5 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  console.info("[Centrum Moderacji] v3.0.0 gotowe .");
+  console.info("[Centrum Moderacji] v3.0.0 gotowe — tryb lokalny bez API i zewnętrznego runtime.");
 })();
