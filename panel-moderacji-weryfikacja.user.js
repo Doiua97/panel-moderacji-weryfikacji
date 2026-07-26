@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.29
+// @version      3.3.30
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.3.29";
+  window[RUNTIME_GUARD] = "3.3.30";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -42,17 +42,55 @@
   const ACTIVE_MAP_PLAYERS_COLLAPSED_KEY = `${SCRIPT_ID}:active-map-players-collapsed`;
   const READY_COMMANDS_KEY = `${SCRIPT_ID}:ready-commands`;
   const START_CONFIG_KEY = `${SCRIPT_ID}:start-config`;
+  const DEFAULT_CONFIGURATION_MIGRATION_KEY = `${SCRIPT_ID}:default-configuration:2026-07-26-v1`;
   const WIDGET_KEY = "MARGO_MODERATION_CENTER";
   const NATIVE_MENU_HOOK_MARK = "__margoModerationCenterPlayerMenuHook__";
   const DEFAULT_START_CONFIG = {
-    local: "",
-    console: "",
-    sendCode: "",
-    sendNick: "",
-    sendScreen: "",
-    finish: ""
+    local: "Weryfikacja Gracza {nick} rozpoczęta.",
+    console: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o przesłanie zrzutu ekranu na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."',
+    sendCode: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o wiadomość {kod} na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."',
+    sendNick: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o przesłanie swojego nicku z gry na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."',
+    sendScreen: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o przesłanie zrzutu ekranu na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."',
+    finish: "Weryfikacja Gracza {nick} zakończona."
   };
-  const DEFAULT_READY_COMMANDS = [];
+  const DEFAULT_READY_COMMANDS = [
+    {
+      id: "default-code-v2",
+      label: "KOD",
+      channel: "CONSOLE",
+      content: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o wiadomość {kod} na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."'
+    },
+    {
+      id: "default-nick-v2",
+      label: "NICK",
+      channel: "CONSOLE",
+      content: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o przesłanie swojego nicku z gry na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."'
+    },
+    {
+      id: "default-screen-v2",
+      label: "SCREEN",
+      channel: "CONSOLE",
+      content: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o przesłanie zrzutu ekranu na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."'
+    },
+    {
+      id: "default-attack-mobs-v2",
+      label: "ZAATAKOWANIE MOBÓW",
+      channel: "CONSOLE",
+      content: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę zaatakować najbliższego moba, lub grupę mobów."'
+    },
+    {
+      id: "default-trade-v2",
+      label: "HANDEL",
+      channel: "CONSOLE",
+      content: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o podejście i rozpoczęcie handlu z moją aktualną Postacią w Grze."'
+    },
+    {
+      id: "default-approach-v2",
+      label: "PODEJŚCIE DO WERYFIKUJĄCEGO",
+      channel: "CONSOLE",
+      content: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o podejście do mojej aktualnej Postaci w Grze."'
+    }
+  ];
   const LEGACY_READY_COMMAND_IDS = new Set(["finish", "code", "nick", "screen", "mobs", "trade", "approach"]);
   const state = {
     selected: { nick: "", id: "" },
@@ -73,6 +111,7 @@
   function waitForGame() {
     const ready = () => Boolean(document.getElementById("GAME_CANVAS") || getEngine()?.hero);
     const start = () => {
+      migrateDefaultConfiguration();
       addStyles();
       createNativeWidget().then(created => {
         if (!created) createLauncher();
@@ -89,6 +128,13 @@
     });
     observer.observe(document.documentElement, { childList: true, subtree: true });
     setTimeout(() => observer.disconnect(), 30000);
+  }
+
+  function migrateDefaultConfiguration() {
+    if (localStorage.getItem(DEFAULT_CONFIGURATION_MIGRATION_KEY) === "1") return;
+    localStorage.setItem(START_CONFIG_KEY, JSON.stringify(DEFAULT_START_CONFIG));
+    localStorage.setItem(READY_COMMANDS_KEY, JSON.stringify(DEFAULT_READY_COMMANDS));
+    localStorage.setItem(DEFAULT_CONFIGURATION_MIGRATION_KEY, "1");
   }
 
   function emptyLocalDatabase() {
@@ -2668,5 +2714,5 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  console.info("[Centrum Moderacji] v3.0.0 gotowe — tryb lokalny bez API i zewnętrznego runtime.");
+  console.info("[Centrum Moderacji] v3.0.0 gotowe .");
 })();
