@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.19
+// @version      3.3.20
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-    window[RUNTIME_GUARD] = "3.3.19";
+    window[RUNTIME_GUARD] = "3.3.20";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -69,8 +69,6 @@
     scanTimer: 0,
     pollTimer: 0,
     ticker: 0,
-    presenceTimer: 0,
-    presence: new Map(),
     panel: null,
     activePanel: null,
     journal: []
@@ -155,7 +153,10 @@
     return cloneLocalValue({
       verification: record.verification,
       participants: record.participants || [],
-      events: record.events || []
+      events: (record.events || []).filter(event =>
+        event?.event_type !== "PARTICIPANT_LEFT_MAP" &&
+        event?.event_type !== "PARTICIPANT_RETURNED"
+      )
     });
   }
 
@@ -252,12 +253,7 @@
         verification_code: data.code || "",
         start_map_id: data.startMapId || null,
         start_map_name: data.startMapName || null,
-        resolved_at: null,
-        presence_status: "PRESENT",
-        last_map_id: data.startMapId || null,
-        last_map_name: data.startMapName || null,
-        last_x: data.x ?? null,
-        last_y: data.y ?? null
+        resolved_at: null
       }],
       events: []
     };
@@ -296,8 +292,6 @@
     state.pollTimer = setInterval(refreshActive, 1000);
     clearInterval(state.ticker);
     state.ticker = setInterval(updateLiveTime, 1000);
-    clearInterval(state.presenceTimer);
-    state.presenceTimer = setInterval(synchronizePresence, 2000);
     window.addEventListener("storage", event => {
       if (event.key === LOCAL_DATABASE_KEY) refreshActive();
     });
@@ -311,7 +305,6 @@
     state.active = details;
     state.journal = getLocalJournal();
     if (oldId !== nextId) {
-      state.presence.clear();
       resetEnhancedMenus();
       scheduleMenuScan();
     }
@@ -1442,7 +1435,7 @@
               </article>
             </div>
             <div class="mc-participant-actions">
-              <span>${item.resolved_at ? "Zakończona" : presenceLabel(item.presence_status)}</span>
+              <span>${item.resolved_at ? "Zakończona" : "Aktywna"}</span>
               ${item.resolved_at ? "" : `
                 ${isGroupVerification ? `
                   <button
@@ -1606,8 +1599,7 @@
         item.id,
         item.character_name,
         item.resolved_at,
-        item.verification_code,
-        item.presence_status
+        item.verification_code
       ]),
       events: (details?.events || []).map(event => [
         event.id,
@@ -1740,7 +1732,6 @@
       return notice("Ten gracz jest już w aktywnej weryfikacji.");
     }
     const map = currentMap();
-    const onMap = readPlayersOnCurrentMap().find(item => sameNick(item.nick, nick));
     const moderator = getCurrentCharacterNick();
     const code = generateCode();
     const config = readStartConfig();
@@ -1763,18 +1754,13 @@
         const participant = {
           id: String(database.nextParticipantId++),
           character_name: nick,
-          character_id: player.id || onMap?.id || resolvePlayerId(nick) || null,
+          character_id: player.id || resolvePlayerId(nick) || null,
           joined_at: joinedAt,
           started_at: joinedAt,
           verification_code: code,
           start_map_id: map.id,
           start_map_name: map.name,
-          resolved_at: null,
-          presence_status: onMap ? "PRESENT" : "MISSING",
-          last_map_id: map.id,
-          last_map_name: map.name,
-          last_x: onMap?.x ?? null,
-          last_y: onMap?.y ?? null
+          resolved_at: null
         };
         record.participants.push(participant);
         addLocalEvent(database, record, {
@@ -1792,7 +1778,7 @@
       } else {
         notice(`Dodano ${nick}, ale klient nie udostępnił konsoli do wysłania .reminder.`);
       }
-      selectPlayers([{ nick, id: player.id || onMap?.id || "" }]);
+      selectPlayers([{ nick, id: player.id || "" }]);
       renderActiveSections();
       notice(`Dodano ${nick} do aktywnej weryfikacji. Kod gracza: ${code}.`);
     } catch (error) {
@@ -1908,7 +1894,6 @@
         );
         if (!stored) throw new Error("PARTICIPANT_NOT_ACTIVE");
         stored.resolved_at = endedAt;
-        stored.presence_status = "RESOLVED";
         addLocalEvent(database, record, {
           title: `Zakończono weryfikację gracza ${stored.character_name}`,
           eventType: "PARTICIPANT_FINISHED",
@@ -1978,7 +1963,6 @@
           );
           if (!stored) continue;
           stored.resolved_at = endedAt;
-          stored.presence_status = "RESOLVED";
           addLocalEvent(database, record, {
             title: `Zakończono weryfikację gracza ${stored.character_name}`,
             eventType: "PARTICIPANT_FINISHED",
@@ -2021,60 +2005,6 @@
         : `Zakończono weryfikację wszystkich graczy (${participants.length}).`);
     } catch (error) {
       notice(`Nie udało się zakończyć weryfikacji grupowej (${error.message}).`);
-    }
-  }
-
-  function synchronizePresence() {
-    const details = state.active;
-    if (!details?.verification || details.verification.status !== "ACTIVE") return;
-    const map = currentMap();
-    const players = readPlayersOnCurrentMap();
-    const updates = [];
-    for (const participant of details.participants || []) {
-      if (participant.resolved_at) continue;
-      const found = players.find(player => sameNick(player.nick, participant.character_name));
-      const status = found ? "PRESENT" : "MISSING";
-      const previousStatus = state.presence.has(participant.id)
-        ? state.presence.get(participant.id)
-        : participant.presence_status;
-      state.presence.set(participant.id, status);
-      if (previousStatus === status) continue;
-      updates.push({ participantId: participant.id, status, previousStatus, found });
-    }
-    if (!updates.length) return;
-    state.active = mutateLocalVerification(details.verification.id, (record, database) => {
-      for (const update of updates) {
-        const participant = (record.participants || []).find(item => String(item.id) === String(update.participantId));
-        if (!participant) continue;
-        participant.presence_status = update.status;
-        participant.last_map_id = map.id;
-        participant.last_map_name = map.name;
-        participant.last_x = update.found?.x ?? null;
-        participant.last_y = update.found?.y ?? null;
-        participant.presence_updated_at = new Date().toISOString();
-        if (update.previousStatus === "PRESENT" && update.status === "MISSING") {
-          addLocalEvent(database, record, {
-            title: `Gracz ${participant.character_name} opuścił bieżącą mapę`,
-            eventType: "PARTICIPANT_LEFT_MAP",
-            details: { characterName: participant.character_name },
-            mapId: map.id,
-            mapName: map.name,
-            participantId: participant.id
-          });
-        } else if (update.previousStatus === "MISSING" && update.status === "PRESENT") {
-          addLocalEvent(database, record, {
-            title: `Gracz ${participant.character_name} wrócił na mapę`,
-            eventType: "PARTICIPANT_RETURNED",
-            details: { characterName: participant.character_name },
-            mapId: map.id,
-            mapName: map.name,
-            participantId: participant.id
-          });
-        }
-      }
-    });
-    if (state.activePanel) {
-      renderActivePanel();
     }
   }
 
@@ -2479,10 +2409,6 @@
     }
   }
 
-  function presenceLabel(value) {
-    return value === "MISSING" ? "poza bieżącą mapą" : value === "RESOLVED" ? "zakończona" : "obecny na mapie";
-  }
-
   function finiteOrNull(value) {
     return Number.isFinite(Number(value)) ? Number(value) : null;
   }
@@ -2524,5 +2450,5 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  console.info("[Centrum Moderacji] v3.0.0 gotowe.");
+  console.info("[Centrum Moderacji] v3.0.0 gotowe — .");
 })();
