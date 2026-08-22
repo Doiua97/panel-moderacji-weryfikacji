@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.31
+// @version      3.3.33
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.3.31";
+  window[RUNTIME_GUARD] = "3.3.33";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -39,12 +39,16 @@
   const PANEL_OPEN_KEY = `${SCRIPT_ID}:panel-open`;
   const ACTIVE_PANEL_POSITION_KEY = `${SCRIPT_ID}:active-panel-position`;
   const ACTIVE_PANEL_OPEN_KEY = `${SCRIPT_ID}:active-panel-open`;
+  const READY_COMMANDS_POSITION_KEY = `${SCRIPT_ID}:ready-commands-position`;
   const ACTIVE_MAP_PLAYERS_COLLAPSED_KEY = `${SCRIPT_ID}:active-map-players-collapsed`;
   const READY_COMMANDS_KEY = `${SCRIPT_ID}:ready-commands`;
   const START_CONFIG_KEY = `${SCRIPT_ID}:start-config`;
   const DEFAULT_CONFIGURATION_MIGRATION_KEY = `${SCRIPT_ID}:default-configuration:2026-07-26-v1`;
   const WIDGET_KEY = "MARGO_MODERATION_CENTER";
   const NATIVE_MENU_HOOK_MARK = "__margoModerationCenterPlayerMenuHook__";
+  const PLAYER_MENU_SHORTCUTS = [
+    ["ready-commands", "Gotowe polecenia"]
+  ];
   const DEFAULT_START_CONFIG = {
     local: "Weryfikacja Gracza {nick} rozpoczęta.",
     console: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o przesłanie zrzutu ekranu na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."',
@@ -2300,7 +2304,7 @@
     const original = current;
     const wrapped = function(playerId, playerNick, menu, ...rest) {
       const result = original.apply(this, [playerId, playerNick, menu, ...rest]);
-      appendNativeVerificationAction(menu, playerId, playerNick);
+      appendNativePlayerMenuActions(menu, playerId, playerNick);
       return result;
     };
     Object.defineProperty(wrapped, NATIVE_MENU_HOOK_MARK, {
@@ -2324,10 +2328,22 @@
     }
   }
 
-  function appendNativeVerificationAction(menu, playerId, playerNick) {
+  function appendNativePlayerMenuActions(menu, playerId, playerNick) {
     if (!Array.isArray(menu)) return;
     const player = nativeMenuPlayer(playerId, playerNick);
     if (!player.nick || sameNick(player.nick, getCurrentCharacterNick())) return;
+
+    for (const [action, label] of PLAYER_MENU_SHORTCUTS) {
+      if (menu.some(entry => Array.isArray(entry) && normalize(entry[0]) === label)) continue;
+      menu.push([label, () => {
+        const currentPlayer = nativeMenuPlayer(player.id, player.nick);
+        if (!currentPlayer.nick) {
+          notice("Nie udało się odczytać danych wybranej postaci.");
+          return;
+        }
+        if (action === "ready-commands") showReadyCommandsPanel(currentPlayer);
+      }]);
+    }
 
     const active = state.active?.verification?.status === "ACTIVE";
     const label = active ? "Dodaj do aktywnej weryfikacji" : "Rozpocznij weryfikację";
@@ -2343,6 +2359,117 @@
       if (hasActiveVerification) addParticipant(currentPlayer);
       else startVerification(currentPlayer);
     }]);
+  }
+
+  function showReadyCommandsPanel(player) {
+    const selectedPlayer = nativeMenuPlayer(player?.id, player?.nick);
+    if (!selectedPlayer.nick) {
+      notice("Nie udało się bezpiecznie rozpoznać nicku wskazanego gracza.");
+      return;
+    }
+
+    document.getElementById(`${SCRIPT_ID}-ready-commands-dialog`)?.remove();
+    const overlay = document.createElement("div");
+    overlay.id = `${SCRIPT_ID}-ready-commands-dialog`;
+    overlay.tabIndex = -1;
+    overlay.innerHTML = `
+      <div class="mc-ready-dialog-window" role="dialog" aria-label="Gotowe polecenia">
+        <header class="mc-ready-dialog-head">
+          <div><small>MENU POD PPM</small><h2>Gotowe polecenia</h2><p>Gracz: <strong data-target></strong></p></div>
+          <button type="button" data-close aria-label="Zamknij">×</button>
+        </header>
+        <div class="mc-ready-dialog-fields">
+          <label>Czas<input type="text" data-command-time placeholder="np. 12h"></label>
+          <label>Kod / powód / treść<span><input type="text" maxlength="180" data-command-reason placeholder="kod zostanie wylosowany"><button type="button" data-generate-code title="Wylosuj nowy czterocyfrowy kod">Losuj</button></span></label>
+        </div>
+        <p class="mc-ready-dialog-help">„Czat” wysyła tekst na kanał lokalny, a „Konsola” wykonuje komendę w konsoli gry.</p>
+        <div class="mc-ready-dialog-list" data-ready-list></div>
+        <footer><button type="button" data-manage>Zarządzaj gotowcami</button></footer>
+      </div>`;
+
+    overlay.querySelector("[data-target]").textContent = selectedPlayer.nick;
+    const reasonInput = overlay.querySelector("[data-command-reason]");
+    overlay.querySelector("[data-generate-code]").addEventListener("click", () => {
+      reasonInput.value = generateCode();
+      reasonInput.focus();
+      reasonInput.select();
+    });
+
+    const list = overlay.querySelector("[data-ready-list]");
+    const commands = readReadyCommands();
+    if (!commands.length) {
+      const empty = document.createElement("p");
+      empty.className = "mc-ready-dialog-empty";
+      empty.textContent = "Brak zapisanych gotowców. Dodaj je w Centrum Moderacji.";
+      list.appendChild(empty);
+    } else {
+      for (const command of commands) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "mc-ready-dialog-command";
+        const name = document.createElement("strong");
+        name.textContent = command.label;
+        const badge = document.createElement("span");
+        badge.textContent = command.channel === "LOCAL" ? "Czat" : "Konsola";
+        const preview = document.createElement("small");
+        preview.textContent = command.content;
+        button.append(name, badge, preview);
+        button.addEventListener("click", () => sendReadyCommandFromPlayerMenu(command, selectedPlayer, overlay));
+        list.appendChild(button);
+      }
+    }
+
+    const win = overlay.querySelector(".mc-ready-dialog-window");
+    const head = overlay.querySelector(".mc-ready-dialog-head");
+    restorePosition(win, READY_COMMANDS_POSITION_KEY);
+    makeMovable(win, {
+      positionKey: READY_COMMANDS_POSITION_KEY,
+      lockKey: `${SCRIPT_ID}:never-lock-ready-commands-panel`,
+      handle: head,
+      lockLabel: "Gotowe polecenia"
+    });
+
+    const close = () => overlay.remove();
+    overlay.querySelector("[data-close]").addEventListener("click", close);
+    overlay.querySelector("[data-manage]").addEventListener("click", () => {
+      close();
+      showPanel(selectedPlayer);
+    });
+    overlay.addEventListener("keydown", event => {
+      if (event.key === "Escape") close();
+    });
+    document.body.appendChild(overlay);
+    overlay.focus();
+  }
+
+  async function sendReadyCommandFromPlayerMenu(command, player, overlay) {
+    const reasonInput = overlay.querySelector("[data-command-reason]");
+    let reason = normalize(reasonInput?.value);
+    if (/\{kod\}/i.test(command.content) && !/^\d{4}$/.test(reason)) {
+      reason = generateCode();
+      if (reasonInput) reasonInput.value = reason;
+    }
+    const resolved = resolveTemplate(command.content, {
+      nick: player.nick,
+      moderator: getCurrentCharacterNick(),
+      czas: normalize(overlay.querySelector("[data-command-time]")?.value),
+      powod: reason,
+      tresc: reason,
+      kod: reason
+    });
+    if (resolved.missing.length) {
+      notice(`Uzupełnij dane dla: ${resolved.missing.join(", ")}.`);
+      return;
+    }
+    const sent = command.channel === "LOCAL"
+      ? await sendLocalChatMessage(resolved.content)
+      : sendViaGameConsole(resolved.content);
+    if (!sent) {
+      notice("Nie udało się wysłać polecenia.");
+      return;
+    }
+    await recordCommand(command.label, resolved.content, command.channel, player.nick);
+    notice(`Wysłano polecenie „${command.label}” do ${player.nick}.`);
   }
 
   function nativeMenuPlayer(playerId, playerNick) {
@@ -2641,6 +2768,17 @@
       #${SCRIPT_ID}-panel .mc-session-grid small,#${SCRIPT_ID}-panel .mc-participant small,#${SCRIPT_ID}-panel .mc-timeline-events small,#${SCRIPT_ID}-panel time{color:#8ea5b5}
       #${SCRIPT_ID}-panel .mc-participants,#${SCRIPT_ID}-panel .mc-map-players,#${SCRIPT_ID}-panel .mc-timeline-head,#${SCRIPT_ID}-panel .mc-journal-toolbar{border-color:#29465b}#${SCRIPT_ID}-panel .mc-journal-toolbar{background:#091620}
       #${SCRIPT_ID}-notice{border-color:#2d6079;background:#0b1b28;color:#dce8f2}
+      #${SCRIPT_ID}-ready-commands-dialog{position:fixed;inset:0;z-index:2147483645;pointer-events:none;color:#dce8f2;font:12px Arial,sans-serif}
+      #${SCRIPT_ID}-ready-commands-dialog *{box-sizing:border-box}
+      #${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-window{position:absolute;right:70px;top:45px;width:min(540px,calc(100vw - 24px));max-height:calc(100vh - 57px);overflow:auto;padding:11px;border:1px solid #2b465c;border-radius:5px;background:rgba(8,18,28,.98);box-shadow:0 14px 42px #000d;pointer-events:auto;scrollbar-width:thin;scrollbar-color:#35556d #07131d}
+      #${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding-bottom:9px;border-bottom:1px solid #29445a;cursor:move;user-select:none;touch-action:none}
+      #${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-head small{color:#68ded9;font-size:9px;font-weight:700;letter-spacing:.1em}#${SCRIPT_ID}-ready-commands-dialog h2{margin:3px 0 0;color:#68ded9;font-size:19px}#${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-head p{margin:4px 0 0;color:#9fb5c4}
+      #${SCRIPT_ID}-ready-commands-dialog button{padding:7px 10px;border:1px solid #35556d;border-radius:3px;background:#16283a;color:#dce8f2;font:bold 12px Arial;cursor:pointer}#${SCRIPT_ID}-ready-commands-dialog button:hover{border-color:#61cbd0;background:#1d3850}#${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-head>[data-close]{border:0;background:none;font-size:20px;line-height:1}
+      #${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-fields{display:grid;grid-template-columns:110px minmax(180px,1fr);gap:7px;margin:10px 0}#${SCRIPT_ID}-ready-commands-dialog label{display:grid;gap:4px;color:#b9cedc;font-size:10px}#${SCRIPT_ID}-ready-commands-dialog label span{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px}
+      #${SCRIPT_ID}-ready-commands-dialog input{min-width:0;width:100%;padding:8px;border:1px solid #304e64;border-radius:3px;background:#07131d;color:#e6f2f8;font:12px Arial;outline:none}#${SCRIPT_ID}-ready-commands-dialog input:focus{border-color:#56cbd0}
+      #${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-help{margin:0 0 8px;color:#8ea5b5;font-size:11px}#${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-list{display:grid;gap:6px}
+      #${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-command{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 8px;width:100%;text-align:left}#${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-command strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-command span{color:#68ded9;font-size:9px;text-transform:uppercase}#${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-command small{grid-column:1/-1;overflow:hidden;color:#8ea5b5;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
+      #${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-empty{padding:10px;border:1px solid #29465b;background:#07131d;color:#8ea5b5}#${SCRIPT_ID}-ready-commands-dialog footer{display:flex;justify-content:flex-end;margin-top:10px}
       #${SCRIPT_ID}-active-panel{position:fixed;inset:0;z-index:2147483001;overflow:visible!important;pointer-events:none;color:#dce8f2;font:12px Arial,sans-serif}
       #${SCRIPT_ID}-active-panel *{box-sizing:border-box}#${SCRIPT_ID}-active-panel .mc-active-window{position:absolute;left:calc(50% - 360px);top:24px;bottom:auto!important;display:block;width:min(720px,calc(100vw - 24px));height:auto!important;min-height:0!important;max-height:calc(100vh - 48px)!important;max-block-size:calc(100vh - 48px)!important;overflow-x:hidden!important;overflow-y:auto!important;padding:8px;border:1px solid #2b465c;border-radius:5px;background:rgba(8,18,28,.97);box-shadow:0 14px 42px #000d;pointer-events:auto;scrollbar-width:thin;scrollbar-color:#35556d #07131d}
       #${SCRIPT_ID}-active-panel [data-active-panel-body],#${SCRIPT_ID}-active-panel .mc-participants,#${SCRIPT_ID}-active-panel .mc-map-players,#${SCRIPT_ID}-active-panel .mc-participant-session{position:static;height:auto!important;min-height:0!important;max-height:none!important;max-block-size:none!important;overflow:visible!important}
@@ -2657,7 +2795,7 @@
       #${SCRIPT_ID}-active-panel .mc-participant-actions{display:flex;flex-wrap:nowrap;align-items:center;justify-content:flex-end;min-width:0;gap:4px;margin-top:5px}
       #${SCRIPT_ID}-active-panel .mc-participant-actions span{flex:0 1 92px;min-width:52px;overflow:hidden;color:#8ea5b5;font-size:10px;text-overflow:ellipsis;white-space:nowrap}#${SCRIPT_ID}-active-panel .mc-participant-actions button{flex:1 1 0;min-width:0;padding:6px 3px;overflow:hidden;font-size:clamp(8px,1.15vw,11px);text-overflow:ellipsis;white-space:nowrap}
       #${SCRIPT_ID}-active-panel .mc-map-players div{display:flex;flex-wrap:wrap;gap:5px}
-      @media(max-width:760px){#${SCRIPT_ID}-panel .mc-command-tabs{grid-template-columns:1fr}#${SCRIPT_ID}-panel .mc-command-fields{grid-template-columns:1fr 1fr}#${SCRIPT_ID}-panel .mc-command-fields .wide{grid-column:1/-1}#${SCRIPT_ID}-panel .mc-ready-editor{grid-template-columns:1fr}#${SCRIPT_ID}-panel .mc-session-grid,#${SCRIPT_ID}-active-panel .mc-session-grid{grid-template-columns:1fr 1fr}#${SCRIPT_ID}-active-panel .mc-active-window{left:12px}}
+      @media(max-width:760px){#${SCRIPT_ID}-panel .mc-command-tabs{grid-template-columns:1fr}#${SCRIPT_ID}-panel .mc-command-fields{grid-template-columns:1fr 1fr}#${SCRIPT_ID}-panel .mc-command-fields .wide{grid-column:1/-1}#${SCRIPT_ID}-panel .mc-ready-editor{grid-template-columns:1fr}#${SCRIPT_ID}-panel .mc-session-grid,#${SCRIPT_ID}-active-panel .mc-session-grid{grid-template-columns:1fr 1fr}#${SCRIPT_ID}-active-panel .mc-active-window{left:12px}#${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-fields{grid-template-columns:1fr}}
     `;
     document.head.appendChild(style);
   }
@@ -2745,5 +2883,5 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  console.info("[Centrum Moderacji] v3.3.31 gotowe .");
+  console.info("[Centrum Moderacji] v3.3.33 gotowe .");
 })();
