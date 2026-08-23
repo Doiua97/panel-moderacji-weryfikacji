@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.40
+// @version      3.3.42
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.3.40";
+  window[RUNTIME_GUARD] = "3.3.42";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -534,6 +534,7 @@
     renderSelected();
     renderReadyCommands();
     renderActiveSections();
+    if (state.accountSearchId) renderAccountCharacters();
   }
 
   function closePanel() {
@@ -980,7 +981,6 @@
 
   async function detectAccountCharacters(id) {
     const target = state.panel?.querySelector("[data-search-results]");
-    if (!target) return;
     const fetchButton = state.panel?.querySelector("[data-select-player]");
     const world = currentWorldName();
     state.accountSearchId = String(id || "");
@@ -988,13 +988,13 @@
       fetchButton.disabled = true;
       fetchButton.textContent = "Pobieranie…";
     }
-    target.innerHTML = `<p>Pobieranie postaci konta ${escapeMarkup(id)} ze świata ${escapeMarkup(world)}…</p>`;
+    if (target) target.innerHTML = `<p>Pobieranie postaci konta ${escapeMarkup(id)} ze świata ${escapeMarkup(world)}…</p>`;
     try {
       const html = await requestPublicProfile(id);
       state.accountCharacters = excludeCurrentCharacter(parseProfileCharacters(html, world));
       renderAccountCharacters();
       if (!state.accountCharacters.length) {
-        target.insertAdjacentHTML(
+        target?.insertAdjacentHTML(
           "beforeend",
           `<p class="mc-muted">Publiczny profil nie zawiera postaci na świecie ${escapeMarkup(world)}.</p>`
         );
@@ -1002,7 +1002,7 @@
     } catch (error) {
       state.accountCharacters = excludeCurrentCharacter(readVisibleAccountCharacters(id, world));
       renderAccountCharacters();
-      target.insertAdjacentHTML(
+      target?.insertAdjacentHTML(
         "beforeend",
         `<p class="mc-muted">Nie udało się odczytać publicznego profilu (${escapeMarkup(error?.message || "błąd połączenia")}). Pokazano wyłącznie pasujące postacie aktualnie widoczne w kliencie.</p>`
       );
@@ -1934,7 +1934,7 @@
     const code = generateCode();
     if (state.panel) state.panel.querySelector("[data-code]").value = code;
     const map = currentMap();
-    const accountId = getPlayerAccountId(player?.id);
+    const accountId = profileAccountId(player?.accountId) || getPlayerAccountId(player?.id);
     const config = readStartConfig();
     const values = { nick, moderator, kod: code, czas: "", powod: "", tresc: "" };
     const local = resolveTemplate(config.local, values);
@@ -1988,7 +1988,7 @@
       return notice("Ten gracz jest już w aktywnej weryfikacji.");
     }
     const map = currentMap();
-    const accountId = getPlayerAccountId(player?.id);
+    const accountId = profileAccountId(player?.accountId) || getPlayerAccountId(player?.id);
     const moderator = getCurrentCharacterNick();
     const code = generateCode();
     const config = readStartConfig();
@@ -2050,19 +2050,16 @@
     const currentPlayer = nativeMenuPlayer(player?.id, player?.nick || player?.name);
     const nick = normalize(currentPlayer.nick || player?.nick || player?.name);
     const characterId = currentPlayer.id || player?.id || null;
-    const accountId = profileAccountId(getPlayerAccountId(characterId));
+    const accountId = profileAccountId(
+      player?.accountId || currentPlayer.accountId || getPlayerAccountId(characterId)
+    );
     if (!accountId) {
       notice(`Nie udało się odczytać ID konta gracza ${nick || "—"} bezpośrednio z danych klienta.`);
       return false;
     }
-    if (!state.panel) showPanel();
     const input = state.panel?.querySelector("[data-search]");
     const panelWindow = state.panel?.querySelector(".mc-window");
-    if (!input) {
-      notice("Nie udało się otworzyć wyszukiwarki konta.");
-      return false;
-    }
-    input.value = accountId;
+    if (input) input.value = accountId;
     state.accountSearchId = accountId;
     panelWindow?.scrollTo({ top: 0, behavior: "smooth" });
     await detectAccountCharacters(accountId);
@@ -2081,7 +2078,8 @@
     }
     await detectPlayerAccountCharacters({
       nick: participant.character_name,
-      id: participant.character_id
+      id: participant.character_id,
+      accountId: participant.account_id
     });
   }
 
@@ -2348,6 +2346,7 @@
   function appendNativePlayerMenuActions(menu, playerId, playerNick) {
     if (!Array.isArray(menu)) return;
     const player = nativeMenuPlayer(playerId, playerNick);
+    player.accountId ||= captureAccountIdFromProfileMenu(menu, player.id);
     if (!player.nick || sameNick(player.nick, getCurrentCharacterNick())) return;
 
     for (const [action, label] of PLAYER_MENU_SHORTCUTS) {
@@ -2386,6 +2385,45 @@
       if (hasActiveVerification) addParticipant(currentPlayer);
       else startVerification(currentPlayer);
     }]);
+  }
+
+  function captureAccountIdFromProfileMenu(menu, characterId) {
+    const profileEntry = menu.find(entry =>
+      Array.isArray(entry) &&
+      typeof entry[1] === "function" &&
+      /profil|profile/i.test(normalize(entry[0]))
+    );
+    if (!profileEntry) return null;
+
+    const page = getPageWindow();
+    const iframeManager = page.Engine?.iframeWindowManager;
+    const originalNewPlayerProfile = iframeManager?.newPlayerProfile;
+    const originalOpen = page.open;
+    let capturedAccountId = null;
+
+    try {
+      if (iframeManager && typeof originalNewPlayerProfile === "function") {
+        iframeManager.newPlayerProfile = data => {
+          if (!characterId || !data?.characterId || String(data.characterId) === String(characterId)) {
+            capturedAccountId = profileAccountId(data?.accountId);
+          }
+        };
+      }
+      page.open = url => {
+        capturedAccountId = profileAccountId(url);
+        return null;
+      };
+      profileEntry[1]();
+    } catch {
+      return null;
+    } finally {
+      if (iframeManager && typeof originalNewPlayerProfile === "function") {
+        iframeManager.newPlayerProfile = originalNewPlayerProfile;
+      }
+      page.open = originalOpen;
+    }
+
+    return capturedAccountId;
   }
 
   function showReadyCommandsPanel(player) {
@@ -2938,5 +2976,5 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  console.info("[Centrum Moderacji] v3.3.33 gotowe .");
+  console.info("[Centrum Moderacji] v3.3.42 gotowe .");
 })();
