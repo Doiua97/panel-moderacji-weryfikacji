@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.48
+// @version      3.3.50
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.3.48";
+  window[RUNTIME_GUARD] = "3.3.50";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -522,42 +522,6 @@
         <div class="mc-search-results" data-search-results></div>
         <p class="mc-note">Tryb interfejsu. Serwer gry nadal sprawdza uprawnienia do każdego polecenia konsoli.</p>
 
-        <div class="mc-command-fields">
-          <label>Czas<input data-time placeholder="np. 12h"></label>
-          <label>Kod<input data-code readonly placeholder="użyj przycisku Losuj"></label>
-          <button type="button" data-random-code>Losuj</button>
-          <label class="wide">Powód / treść<input data-reason placeholder="Wpisz powód lub własną treść"></label>
-        </div>
-
-        <div class="mc-command-tabs" data-command-sections>
-          <button type="button" data-command-tab="player">Gracz</button>
-          <button type="button" data-command-tab="location">Bieżąca lokalizacja</button>
-        </div>
-        <div class="mc-command-panes">
-          <section class="mc-box" data-command-section="player" hidden>
-            <h3>Gracz</h3>
-            <div class="mc-actions">
-              <button data-command="reminder">Wyślij upomnienie</button>
-              <button data-command="mute">Nałóż wyciszenie</button>
-              <button data-command="unmute">Zdejmij wyciszenie</button>
-              <button class="danger" data-command="kill">Kill</button>
-              <button class="danger" data-command="unkill">Unkill</button>
-            </div>
-          </section>
-          <section class="mc-box" data-command-section="location" hidden>
-            <h3>Bieżąca lokalizacja</h3>
-            <div class="mc-actions">
-              <button data-command="chatlock">Zablokuj czat</button>
-              <button data-command="chatunlock">Odblokuj czat</button>
-              <button data-command="chatadd">Zezwól graczowi</button>
-              <button data-command="chatdel">Odbierz pozwolenie</button>
-              <button data-command="chatlist">Lista uprawnionych</button>
-              <button data-command="reminderlist">Lista upomnień</button>
-              <button data-command="mutedlist">Lista wyciszonych</button>
-            </div>
-          </section>
-        </div>
-
         <details class="mc-block" open>
           <summary>Aktywna weryfikacja <b data-active-state>BRAK SESJI</b></summary>
           <div data-active-summary></div>
@@ -618,23 +582,6 @@
       if (input) input.value = "";
       if (results) results.innerHTML = "";
       renderSelected();
-    });
-    overlay.querySelector("[data-random-code]").addEventListener("click", randomizeVerificationCode);
-    overlay.querySelectorAll("[data-command-tab]").forEach(tab => {
-      tab.addEventListener("click", () => {
-        const selected = tab.dataset.commandTab;
-        const pane = overlay.querySelector(`[data-command-section="${selected}"]`);
-        const willOpen = pane?.hidden !== false;
-        overlay.querySelectorAll("[data-command-section]").forEach(section => { section.hidden = true; });
-        overlay.querySelectorAll("[data-command-tab]").forEach(button => button.classList.remove("active"));
-        if (pane && willOpen) {
-          pane.hidden = false;
-          tab.classList.add("active");
-        }
-      });
-    });
-    overlay.querySelectorAll("[data-command]").forEach(button => {
-      button.addEventListener("click", () => executeModeratorCommand(button.dataset.command));
     });
     overlay.querySelector("[data-save-start]").addEventListener("click", () => {
       persistStartConfigFromPanel(overlay, true);
@@ -1188,8 +1135,9 @@
       </div>
       <div class="mc-account-batch" data-account-batch hidden>
         <span data-account-selection-count></span>
-        <button type="button" class="danger" data-account-batch-command="kill">Zabij zaznaczone postacie</button>
-        <button type="button" class="danger" data-account-batch-command="unkill">Zdejmij zabicie z zaznaczonych postaci</button>
+        <label class="mc-account-batch-time">Czas<input data-time placeholder="np. 12h"></label>
+        <button type="button" class="danger" data-account-batch-command="kill">Zabij</button>
+        <button type="button" class="danger" data-account-batch-command="unkill">Zdejmij zabicie</button>
       </div>`;
 
     target.querySelectorAll("[data-account-character]").forEach(input => {
@@ -1771,7 +1719,8 @@
     if (!moderator) return notice("Klient gry nie udostępnił danych aktualnej postaci.");
     if (state.active?.verification?.status === "ACTIVE") return addParticipant(player);
     const code = generateCode();
-    if (state.panel) state.panel.querySelector("[data-code]").value = code;
+    const panelCodeInput = state.panel?.querySelector("[data-code]");
+    if (panelCodeInput) panelCodeInput.value = code;
     const map = currentMap();
     const accountId = profileAccountId(player?.accountId) || getPlayerAccountId(player?.id);
     const config = readStartConfig();
@@ -2524,7 +2473,7 @@
       #${SCRIPT_ID}-panel input,#${SCRIPT_ID}-panel textarea,#${SCRIPT_ID}-panel select{width:100%;padding:8px;border:1px solid #5d512e;border-radius:2px;background:#11120f;color:#eee2b8;outline:none}#${SCRIPT_ID}-panel textarea{min-height:55px;resize:vertical}
       #${SCRIPT_ID}-panel input:focus,#${SCRIPT_ID}-panel textarea:focus,#${SCRIPT_ID}-panel select:focus{border-color:#b79b4d}
       #${SCRIPT_ID}-panel .mc-selected{margin:9px 0;color:#c0b596}#${SCRIPT_ID}-panel .mc-search{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px}#${SCRIPT_ID}-panel .mc-note{padding:7px;border-left:3px solid #c6a641;background:#151610;color:#9e967e}
-      #${SCRIPT_ID}-panel .mc-command-fields{display:grid;grid-template-columns:76px 76px auto minmax(0,1fr);gap:6px;align-items:end;margin:8px 0}#${SCRIPT_ID}-panel label{display:grid;gap:4px;color:#d4c68e}#${SCRIPT_ID}-panel label.wide{min-width:0}
+      #${SCRIPT_ID}-panel label{display:grid;gap:4px;color:#d4c68e}#${SCRIPT_ID}-panel label.wide{min-width:0}
       #${SCRIPT_ID}-panel .mc-command-tabs{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px}#${SCRIPT_ID}-panel .mc-command-tabs button{text-align:left}#${SCRIPT_ID}-panel .mc-command-tabs button.active{border-color:#61cbd0;background:#1d3850;color:#68ded9}#${SCRIPT_ID}-panel .mc-command-panes [data-command-section][hidden]{display:none!important}#${SCRIPT_ID}-panel .mc-command-panes .mc-box{margin-top:7px}#${SCRIPT_ID}-panel .mc-box,#${SCRIPT_ID}-panel .mc-block{margin-top:9px;padding:9px;border:1px solid #554825;border-radius:3px;background:#1d1b16}
       #${SCRIPT_ID}-panel h3,#${SCRIPT_ID}-panel h4{margin:0 0 8px;color:#e4c85f}#${SCRIPT_ID}-panel .mc-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px}#${SCRIPT_ID}-panel .mc-actions button{text-align:left}
       #${SCRIPT_ID}-panel summary{display:flex;justify-content:space-between;gap:10px;color:#e6cc67;font-weight:bold;cursor:pointer;list-style:none}#${SCRIPT_ID}-panel summary b{color:#938a70;font-size:10px}#${SCRIPT_ID}-panel summary::-webkit-details-marker{display:none}
@@ -2538,9 +2487,10 @@
       #${SCRIPT_ID}-panel .mc-account-character span{display:grid;gap:2px;min-width:0}
       #${SCRIPT_ID}-panel .mc-account-character strong{overflow:hidden;color:#dce8f2;font-size:11px;text-overflow:ellipsis;white-space:nowrap}
       #${SCRIPT_ID}-panel .mc-account-character small{color:#8ea5b5;font-size:9px}
-      #${SCRIPT_ID}-panel .mc-account-batch{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:7px;background:#091620}
+      #${SCRIPT_ID}-panel .mc-account-batch{display:grid;grid-template-columns:84px 1fr 1fr;align-items:end;gap:6px;padding:7px;background:#091620}
       #${SCRIPT_ID}-panel .mc-account-batch[hidden]{display:none!important}
       #${SCRIPT_ID}-panel .mc-account-batch span{grid-column:1/-1;color:#9fb5c4;font-size:10px}
+      #${SCRIPT_ID}-panel .mc-account-batch-time{min-width:0;font-size:9px}
       #${SCRIPT_ID}-panel .mc-account-batch button{width:100%;min-width:0;padding:6px 4px;font-size:9px;line-height:1.2}
       #${SCRIPT_ID}-panel .mc-ready-editor{display:grid;grid-template-columns:minmax(0,1fr) 92px auto auto;gap:6px;margin:8px 0}#${SCRIPT_ID}-panel .mc-ready-editor textarea{grid-column:1/-1;min-height:37px}#${SCRIPT_ID}-panel .mc-ready-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:8px;border-top:1px solid #4c4023}
       #${SCRIPT_ID}-panel .mc-ready-row div{display:grid;grid-template-columns:auto auto;gap:4px 8px}#${SCRIPT_ID}-panel .mc-ready-row code{grid-column:1/-1;overflow:hidden;color:#bfcf81;text-overflow:ellipsis;white-space:nowrap}#${SCRIPT_ID}-panel .mc-ready-row small{color:#e2b841}
@@ -2690,5 +2640,5 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  console.info("[Centrum Moderacji] v3.3.48 gotowe .");
+  console.info("[Centrum Moderacji] v3.3.50 gotowe .");
 })();
