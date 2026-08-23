@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.42
+// @version      3.3.48
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.3.42";
+  window[RUNTIME_GUARD] = "3.3.48";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -39,63 +39,22 @@
   const PANEL_OPEN_KEY = `${SCRIPT_ID}:panel-open`;
   const ACTIVE_PANEL_POSITION_KEY = `${SCRIPT_ID}:active-panel-position`;
   const ACTIVE_PANEL_OPEN_KEY = `${SCRIPT_ID}:active-panel-open`;
-  const READY_COMMANDS_POSITION_KEY = `${SCRIPT_ID}:ready-commands-position`;
   const ACTIVE_MAP_PLAYERS_COLLAPSED_KEY = `${SCRIPT_ID}:active-map-players-collapsed`;
-  const READY_COMMANDS_KEY = `${SCRIPT_ID}:ready-commands`;
   const START_CONFIG_KEY = `${SCRIPT_ID}:start-config`;
-  const DEFAULT_CONFIGURATION_MIGRATION_KEY = `${SCRIPT_ID}:default-configuration:2026-07-26-v1`;
+  const DEFAULT_CONFIGURATION_MIGRATION_KEY = `${SCRIPT_ID}:default-configuration:2026-08-24-v2`;
   const WIDGET_KEY = "MARGO_MODERATION_CENTER";
   const NATIVE_MENU_HOOK_MARK = "__margoModerationCenterPlayerMenuHook__";
-  const PLAYER_MENU_SHORTCUTS = [
-    ["ready-commands", "Gotowe polecenia"]
-  ];
   const DEFAULT_START_CONFIG = {
-    local: "Weryfikacja Gracza {nick} rozpoczęta.",
-    console: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o przesłanie zrzutu ekranu na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."',
-    sendCode: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o wiadomość {kod} na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."',
-    sendNick: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o przesłanie swojego nicku z gry na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."',
-    sendScreen: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o przesłanie zrzutu ekranu na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."',
+    local: "Witam, rozpoczynam weryfikację gracza: {nick}.",
+    console: '.reminder "{nick}" "Rozpoczynam weryfikację. Polecenie weryfikacyjne: Proszę o przesłanie linku do zrzutu ekranu z widocznym oknem gry oraz otwartym poleceniem na moją aktualną Postać poprzez Czat prywatny w Grze."',
+    sendCode: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o wiadomość zawierającą kod: {kod} na moją aktualną Postać poprzez Czat prywatny w Grze."',
+    sendNick: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o przesłanie swojego nicku z gry na moją aktualną Postać poprzez Czat prywatny w Grze."',
+    sendScreen: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o przesłanie linku do zrzutu ekranu z widocznym oknem gry oraz otwartym poleceniem na moją aktualną Postać poprzez Czat prywatny w Grze."',
+    sendTrade: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o podejście i rozpoczęcie handlu z moją Postacią w Grze."',
+    sendAttack: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o podejście i zaatakowanie najbliższego moba, lub grupę mobów."',
+    sendReminder: '.reminder "{nick}" "Proszę o wykonanie polecenia weryfikacyjnego"',
     finish: "Weryfikacja Gracza {nick} zakończona."
   };
-  const DEFAULT_READY_COMMANDS = [
-    {
-      id: "default-code-v2",
-      label: "KOD",
-      channel: "CONSOLE",
-      content: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o wiadomość {kod} na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."'
-    },
-    {
-      id: "default-nick-v2",
-      label: "NICK",
-      channel: "CONSOLE",
-      content: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o przesłanie swojego nicku z gry na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."'
-    },
-    {
-      id: "default-screen-v2",
-      label: "SCREEN",
-      channel: "CONSOLE",
-      content: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o przesłanie zrzutu ekranu na moją aktualną Postać w prywatnej wiadomości na czacie prywatnym."'
-    },
-    {
-      id: "default-attack-mobs-v2",
-      label: "ZAATAKOWANIE MOBÓW",
-      channel: "CONSOLE",
-      content: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę zaatakować najbliższego moba, lub grupę mobów."'
-    },
-    {
-      id: "default-trade-v2",
-      label: "HANDEL",
-      channel: "CONSOLE",
-      content: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o podejście i rozpoczęcie handlu z moją aktualną Postacią w Grze."'
-    },
-    {
-      id: "default-approach-v2",
-      label: "PODEJŚCIE DO WERYFIKUJĄCEGO",
-      channel: "CONSOLE",
-      content: '.reminder "{nick}" "Polecenie weryfikacyjne: Proszę o podejście do mojej aktualnej Postaci w Grze."'
-    }
-  ];
-  const LEGACY_READY_COMMAND_IDS = new Set(["finish", "code", "nick", "screen", "mobs", "trade", "approach"]);
   const state = {
     selected: { nick: "", id: "" },
     selectedPlayers: [],
@@ -137,7 +96,6 @@
   function migrateDefaultConfiguration() {
     if (localStorage.getItem(DEFAULT_CONFIGURATION_MIGRATION_KEY) === "1") return;
     localStorage.setItem(START_CONFIG_KEY, JSON.stringify(DEFAULT_START_CONFIG));
-    localStorage.setItem(READY_COMMANDS_KEY, JSON.stringify(DEFAULT_READY_COMMANDS));
     localStorage.setItem(DEFAULT_CONFIGURATION_MIGRATION_KEY, "1");
   }
 
@@ -532,7 +490,6 @@
     restorePosition(overlay.querySelector(".mc-window"), PANEL_POSITION_KEY);
     bindPanel(overlay);
     renderSelected();
-    renderReadyCommands();
     renderActiveSections();
     if (state.accountSearchId) renderAccountCharacters();
   }
@@ -615,23 +572,13 @@
           <p>W poleceniu „Wyślij kod” użyj <code>{nick}</code> oraz <code>{kod}</code>. Kod zostanie zastąpiony osobnym kodem wybranego uczestnika.</p>
           <label>Polecenie „Wyślij nick”<textarea data-send-nick-command>${escapeMarkup(start.sendNick)}</textarea></label>
           <label>Polecenie „Wyślij screen”<textarea data-send-screen-command>${escapeMarkup(start.sendScreen)}</textarea></label>
+          <label>Polecenie „Handel”<textarea data-send-trade-command>${escapeMarkup(start.sendTrade)}</textarea></label>
+          <label>Polecenie „Atak mobów”<textarea data-send-attack-command>${escapeMarkup(start.sendAttack)}</textarea></label>
+          <label>Polecenie „Ponaglij”<textarea data-send-reminder-command>${escapeMarkup(start.sendReminder)}</textarea></label>
           <p>Polecenia są wysyłane przez konsolę gry do uczestnika wybranego w panelu aktywnej weryfikacji. Możesz użyć: <code>{nick}</code>, <code>{moderator}</code> oraz <code>{kod}</code>.</p>
           <label>Wiadomość kończąca na czat lokalny<textarea data-finish-local>${escapeMarkup(start.finish)}</textarea></label>
           <p>W wiadomości kończącej możesz użyć: <code>{nick}</code> oraz <code>{moderator}</code>.</p>
           <button type="button" data-save-start>Zapisz</button>
-        </details>
-
-        <details class="mc-block" open>
-          <summary>Gotowe polecenia <b>MENU POD PPM</b></summary>
-          <p>Zmienne: <code>{nick}</code>, <code>{moderator}</code>, <code>{czas}</code>, <code>{powod}</code>/<code>{powód}</code>, <code>{kod}</code>, <code>{tresc}</code>/<code>{treść}</code>.</p>
-          <div class="mc-ready-editor">
-            <input data-ready-label placeholder="Nazwa polecenia">
-            <select data-ready-channel><option value="CONSOLE">Konsola</option><option value="LOCAL">Czat lokalny</option></select>
-            <textarea data-ready-content placeholder="Treść polecenia"></textarea>
-            <button type="button" data-ready-save>Dodaj</button>
-            <button type="button" data-ready-cancel hidden>Anuluj edycję</button>
-          </div>
-          <div data-ready-list></div>
         </details>
 
         <details class="mc-block">
@@ -698,12 +645,13 @@
       "[data-send-code-command]",
       "[data-send-nick-command]",
       "[data-send-screen-command]",
+      "[data-send-trade-command]",
+      "[data-send-attack-command]",
+      "[data-send-reminder-command]",
       "[data-finish-local]"
     ].join(",")).forEach(field => {
       field.addEventListener("input", () => persistStartConfigFromPanel(overlay, false));
     });
-    overlay.querySelector("[data-ready-save]").addEventListener("click", saveReadyCommand);
-    overlay.querySelector("[data-ready-cancel]").addEventListener("click", resetReadyEditor);
     overlay.querySelector("[data-clear-journal]").addEventListener("click", clearVerificationJournal);
   }
 
@@ -1310,6 +1258,9 @@
       sendCode: typeof source.sendCode === "string" ? source.sendCode : DEFAULT_START_CONFIG.sendCode,
       sendNick: typeof source.sendNick === "string" ? source.sendNick : DEFAULT_START_CONFIG.sendNick,
       sendScreen: typeof source.sendScreen === "string" ? source.sendScreen : DEFAULT_START_CONFIG.sendScreen,
+      sendTrade: typeof source.sendTrade === "string" ? source.sendTrade : DEFAULT_START_CONFIG.sendTrade,
+      sendAttack: typeof source.sendAttack === "string" ? source.sendAttack : DEFAULT_START_CONFIG.sendAttack,
+      sendReminder: typeof source.sendReminder === "string" ? source.sendReminder : DEFAULT_START_CONFIG.sendReminder,
       finish: typeof source.finish === "string" ? source.finish : DEFAULT_START_CONFIG.finish
     };
   }
@@ -1336,6 +1287,9 @@
       sendCode: root.querySelector("[data-send-code-command]")?.value.trim() ?? "",
       sendNick: root.querySelector("[data-send-nick-command]")?.value.trim() ?? "",
       sendScreen: root.querySelector("[data-send-screen-command]")?.value.trim() ?? "",
+      sendTrade: root.querySelector("[data-send-trade-command]")?.value.trim() ?? "",
+      sendAttack: root.querySelector("[data-send-attack-command]")?.value.trim() ?? "",
+      sendReminder: root.querySelector("[data-send-reminder-command]")?.value.trim() ?? "",
       finish: root.querySelector("[data-finish-local]")?.value.trim() ?? ""
     };
   }
@@ -1351,6 +1305,9 @@
         sendCode: "[data-send-code-command]",
         sendNick: "[data-send-nick-command]",
         sendScreen: "[data-send-screen-command]",
+        sendTrade: "[data-send-trade-command]",
+        sendAttack: "[data-send-attack-command]",
+        sendReminder: "[data-send-reminder-command]",
         finish: "[data-finish-local]"
       };
       const complete = Object.entries(fields).every(([key, selector]) => {
@@ -1369,127 +1326,6 @@
       if (showNotice) notice(`Nie udało się zapisać konfiguracji (${error.message}).`);
       return false;
     }
-  }
-
-  function readReadyCommands() {
-    try {
-      const value = JSON.parse(localStorage.getItem(READY_COMMANDS_KEY) || "null");
-      if (!Array.isArray(value)) return structuredClone(DEFAULT_READY_COMMANDS);
-      const commands = value.filter(command => !LEGACY_READY_COMMAND_IDS.has(command?.id));
-      if (commands.length !== value.length) writeReadyCommands(commands);
-      return commands;
-    } catch {
-      return structuredClone(DEFAULT_READY_COMMANDS);
-    }
-  }
-
-  function writeReadyCommands(commands) {
-    localStorage.setItem(READY_COMMANDS_KEY, JSON.stringify(commands));
-  }
-
-  function renderReadyCommands() {
-    const target = state.panel?.querySelector("[data-ready-list]");
-    if (!target) return;
-    target.innerHTML = readReadyCommands().map(command => `
-      <article class="mc-ready-row">
-        <div><strong>${escapeMarkup(command.label)}</strong><small>${command.channel === "LOCAL" ? "CZAT" : "KONSOLA"}</small><code>${escapeMarkup(command.content)}</code></div>
-        <span>
-          <button data-ready-send="${escapeAttribute(command.id)}">Wyślij</button>
-          <button data-ready-edit="${escapeAttribute(command.id)}">Edytuj</button>
-          <button class="danger" data-ready-delete="${escapeAttribute(command.id)}">Usuń</button>
-        </span>
-      </article>`).join("");
-    target.querySelectorAll("[data-ready-send]").forEach(button => button.addEventListener("click", () => sendReadyCommand(button.dataset.readySend)));
-    target.querySelectorAll("[data-ready-edit]").forEach(button => button.addEventListener("click", () => editReadyCommand(button.dataset.readyEdit)));
-    target.querySelectorAll("[data-ready-delete]").forEach(button => button.addEventListener("click", () => {
-      writeReadyCommands(readReadyCommands().filter(item => item.id !== button.dataset.readyDelete));
-      renderReadyCommands();
-    }));
-  }
-
-  async function sendReadyCommand(id) {
-    const command = readReadyCommands().find(item => item.id === id);
-    if (!command) return;
-    const targets = selectedPlayers();
-    const usesNick = /\{nick\}/i.test(command.content);
-    const usesCode = /\{kod\}/i.test(command.content);
-    if ((usesNick || usesCode) && !targets.length) return notice("Najpierw wybierz gracza.");
-
-    // Czat lokalny potrafi zawrzeć wiele nicków w jednej wiadomości. Kod jest
-    // jednak indywidualny, dlatego szablony z {kod} zawsze wysyłamy osobno.
-    if (command.channel === "LOCAL" && targets.length > 1 && usesNick && !usesCode) {
-      const combinedNames = targets.map(item => item.nick).join(", ");
-      const resolved = resolveTemplate(command.content, { nick: combinedNames });
-      if (resolved.missing.length) return notice(`Uzupełnij dane dla: ${resolved.missing.join(", ")}.`);
-      if (!await sendLocalChatMessage(resolved.content)) return notice("Nie udało się wysłać polecenia.");
-      for (const target of targets) {
-        await recordCommand(command.label, resolved.content, command.channel, target.nick);
-      }
-      notice(`Wysłano polecenie „${command.label}” do ${targets.length} graczy.`);
-      return;
-    }
-
-    const deliveries = (usesNick || usesCode) ? targets : [{ nick: "", id: "" }];
-    for (const target of deliveries) {
-      const participant = findParticipant(target.nick);
-      const resolved = resolveTemplate(command.content, {
-        nick: target.nick,
-        kod: normalize(participant?.verification_code)
-          || normalize(state.panel?.querySelector("[data-code]")?.value)
-          || normalize(state.active?.verification?.verification_code)
-      });
-      if (resolved.missing.length) return notice(`Uzupełnij dane dla: ${resolved.missing.join(", ")}.`);
-      const sent = command.channel === "LOCAL"
-        ? await sendLocalChatMessage(resolved.content)
-        : sendViaGameConsole(resolved.content);
-      if (!sent) return notice("Nie udało się wysłać polecenia.");
-      await recordCommand(command.label, resolved.content, command.channel, target.nick);
-    }
-    notice(deliveries.length > 1
-      ? `Wysłano polecenie „${command.label}” osobno do ${deliveries.length} graczy.`
-      : `Wysłano polecenie „${command.label}”.`);
-  }
-
-  function editReadyCommand(id) {
-    const command = readReadyCommands().find(item => item.id === id);
-    if (!command || !state.panel) return;
-    state.panel.querySelector("[data-ready-label]").value = command.label;
-    state.panel.querySelector("[data-ready-channel]").value = command.channel;
-    state.panel.querySelector("[data-ready-content]").value = command.content;
-    state.panel.querySelector("[data-ready-save]").dataset.editId = id;
-    state.panel.querySelector("[data-ready-save]").textContent = "Zapisz";
-    state.panel.querySelector("[data-ready-cancel]").hidden = false;
-  }
-
-  function saveReadyCommand() {
-    if (!state.panel) return;
-    const label = normalize(state.panel.querySelector("[data-ready-label]").value);
-    const content = normalize(state.panel.querySelector("[data-ready-content]").value);
-    const channel = state.panel.querySelector("[data-ready-channel]").value === "LOCAL" ? "LOCAL" : "CONSOLE";
-    if (!label || !content) return notice("Podaj nazwę oraz treść polecenia.");
-    const button = state.panel.querySelector("[data-ready-save]");
-    const commands = readReadyCommands();
-    const editId = button.dataset.editId;
-    if (editId) {
-      const index = commands.findIndex(item => item.id === editId);
-      if (index >= 0) commands[index] = { ...commands[index], label, channel, content };
-    } else {
-      commands.push({ id: crypto.randomUUID?.() || `${Date.now()}`, label, channel, content });
-    }
-    writeReadyCommands(commands);
-    resetReadyEditor();
-    renderReadyCommands();
-  }
-
-  function resetReadyEditor() {
-    if (!state.panel) return;
-    state.panel.querySelector("[data-ready-label]").value = "";
-    state.panel.querySelector("[data-ready-content]").value = "";
-    state.panel.querySelector("[data-ready-channel]").value = "CONSOLE";
-    const button = state.panel.querySelector("[data-ready-save]");
-    delete button.dataset.editId;
-    button.textContent = "Dodaj";
-    state.panel.querySelector("[data-ready-cancel]").hidden = true;
   }
 
   async function recordCommand(name, content, channel, targetNick = "") {
@@ -1684,11 +1520,14 @@
                   type="button"
                   data-load-participant-account="${escapeAttribute(item.id)}"
                   title="Otwórz w Centrum Moderacji postacie tego konta"
-                >Pobierz ID konta</button>
-                <button type="button" data-send-participant-code="${escapeAttribute(item.id)}">Wyślij nowy kod</button>
-                <button type="button" data-send-participant-command="sendNick" data-participant-id="${escapeAttribute(item.id)}">Wyślij nick</button>
-                <button type="button" data-send-participant-command="sendScreen" data-participant-id="${escapeAttribute(item.id)}">Wyślij screen</button>
-                <button type="button" class="danger" data-finish-participant="${escapeAttribute(item.id)}">Zakończ weryfikację</button>`}
+                >IDKONTA</button>
+                <button type="button" data-send-participant-code="${escapeAttribute(item.id)}">Kod</button>
+                <button type="button" data-send-participant-command="sendNick" data-participant-id="${escapeAttribute(item.id)}">Nick</button>
+                <button type="button" data-send-participant-command="sendScreen" data-participant-id="${escapeAttribute(item.id)}">Screen</button>
+                <button type="button" data-send-participant-command="sendTrade" data-participant-id="${escapeAttribute(item.id)}">Handel</button>
+                <button type="button" data-send-participant-command="sendAttack" data-participant-id="${escapeAttribute(item.id)}">Atak mobów</button>
+                <button type="button" data-send-participant-command="sendReminder" data-participant-id="${escapeAttribute(item.id)}">Ponaglij</button>
+                <button type="button" class="danger" data-finish-participant="${escapeAttribute(item.id)}">Zakończ</button>`}
             </div>
           </article>`).join("")}
       </section>
@@ -2143,7 +1982,10 @@
     if (!participant) return notice("Ten uczestnik nie ma aktywnej weryfikacji.");
     const definitions = {
       sendNick: { label: "WYŚLIJ NICK" },
-      sendScreen: { label: "WYŚLIJ SCREEN" }
+      sendScreen: { label: "WYŚLIJ SCREEN" },
+      sendTrade: { label: "HANDEL" },
+      sendAttack: { label: "ATAK MOBÓW" },
+      sendReminder: { label: "PONAGLIJ" }
     };
     const definition = definitions[commandKey];
     if (!definition) return notice("Nieznany typ polecenia.");
@@ -2349,23 +2191,6 @@
     player.accountId ||= captureAccountIdFromProfileMenu(menu, player.id);
     if (!player.nick || sameNick(player.nick, getCurrentCharacterNick())) return;
 
-    for (const [action, label] of PLAYER_MENU_SHORTCUTS) {
-      if (menu.some(entry => Array.isArray(entry) && normalize(entry[0]) === label)) continue;
-      menu.push([label, () => {
-        const refreshedPlayer = nativeMenuPlayer(player.id, player.nick);
-        const currentPlayer = {
-          ...player,
-          ...refreshedPlayer,
-          accountId: refreshedPlayer.accountId || player.accountId || null
-        };
-        if (!currentPlayer.nick) {
-          notice("Nie udało się odczytać danych wybranej postaci.");
-          return;
-        }
-        if (action === "ready-commands") showReadyCommandsPanel(currentPlayer);
-      }]);
-    }
-
     const active = state.active?.verification?.status === "ACTIVE";
     const label = active ? "Dodaj do aktywnej weryfikacji" : "Rozpocznij weryfikację";
     if (menu.some(entry => Array.isArray(entry) && normalize(entry[0]) === label)) return;
@@ -2424,117 +2249,6 @@
     }
 
     return capturedAccountId;
-  }
-
-  function showReadyCommandsPanel(player) {
-    const selectedPlayer = nativeMenuPlayer(player?.id, player?.nick);
-    if (!selectedPlayer.nick) {
-      notice("Nie udało się bezpiecznie rozpoznać nicku wskazanego gracza.");
-      return;
-    }
-
-    document.getElementById(`${SCRIPT_ID}-ready-commands-dialog`)?.remove();
-    const overlay = document.createElement("div");
-    overlay.id = `${SCRIPT_ID}-ready-commands-dialog`;
-    overlay.tabIndex = -1;
-    overlay.innerHTML = `
-      <div class="mc-ready-dialog-window" role="dialog" aria-label="Gotowe polecenia">
-        <header class="mc-ready-dialog-head">
-          <div><small>MENU POD PPM</small><h2>Gotowe polecenia</h2><p>Gracz: <strong data-target></strong></p></div>
-          <button type="button" data-close aria-label="Zamknij">×</button>
-        </header>
-        <div class="mc-ready-dialog-fields">
-          <label>Czas<input type="text" data-command-time placeholder="np. 12h"></label>
-          <label>Kod / powód / treść<span><input type="text" maxlength="180" data-command-reason placeholder="kod zostanie wylosowany"><button type="button" data-generate-code title="Wylosuj nowy czterocyfrowy kod">Losuj</button></span></label>
-        </div>
-        <p class="mc-ready-dialog-help">„Czat” wysyła tekst na kanał lokalny, a „Konsola” wykonuje komendę w konsoli gry.</p>
-        <div class="mc-ready-dialog-list" data-ready-list></div>
-        <footer><button type="button" data-manage>Zarządzaj gotowcami</button></footer>
-      </div>`;
-
-    overlay.querySelector("[data-target]").textContent = selectedPlayer.nick;
-    const reasonInput = overlay.querySelector("[data-command-reason]");
-    overlay.querySelector("[data-generate-code]").addEventListener("click", () => {
-      reasonInput.value = generateCode();
-      reasonInput.focus();
-      reasonInput.select();
-    });
-
-    const list = overlay.querySelector("[data-ready-list]");
-    const commands = readReadyCommands();
-    if (!commands.length) {
-      const empty = document.createElement("p");
-      empty.className = "mc-ready-dialog-empty";
-      empty.textContent = "Brak zapisanych gotowców. Dodaj je w Centrum Moderacji.";
-      list.appendChild(empty);
-    } else {
-      for (const command of commands) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "mc-ready-dialog-command";
-        const name = document.createElement("strong");
-        name.textContent = command.label;
-        const badge = document.createElement("span");
-        badge.textContent = command.channel === "LOCAL" ? "Czat" : "Konsola";
-        const preview = document.createElement("small");
-        preview.textContent = command.content;
-        button.append(name, badge, preview);
-        button.addEventListener("click", () => sendReadyCommandFromPlayerMenu(command, selectedPlayer, overlay));
-        list.appendChild(button);
-      }
-    }
-
-    const win = overlay.querySelector(".mc-ready-dialog-window");
-    const head = overlay.querySelector(".mc-ready-dialog-head");
-    restorePosition(win, READY_COMMANDS_POSITION_KEY);
-    makeMovable(win, {
-      positionKey: READY_COMMANDS_POSITION_KEY,
-      lockKey: `${SCRIPT_ID}:never-lock-ready-commands-panel`,
-      handle: head,
-      lockLabel: "Gotowe polecenia"
-    });
-
-    const close = () => overlay.remove();
-    overlay.querySelector("[data-close]").addEventListener("click", close);
-    overlay.querySelector("[data-manage]").addEventListener("click", () => {
-      close();
-      showPanel(selectedPlayer);
-    });
-    overlay.addEventListener("keydown", event => {
-      if (event.key === "Escape") close();
-    });
-    document.body.appendChild(overlay);
-    overlay.focus();
-  }
-
-  async function sendReadyCommandFromPlayerMenu(command, player, overlay) {
-    const reasonInput = overlay.querySelector("[data-command-reason]");
-    let reason = normalize(reasonInput?.value);
-    if (/\{kod\}/i.test(command.content) && !/^\d{4}$/.test(reason)) {
-      reason = generateCode();
-      if (reasonInput) reasonInput.value = reason;
-    }
-    const resolved = resolveTemplate(command.content, {
-      nick: player.nick,
-      moderator: getCurrentCharacterNick(),
-      czas: normalize(overlay.querySelector("[data-command-time]")?.value),
-      powod: reason,
-      tresc: reason,
-      kod: reason
-    });
-    if (resolved.missing.length) {
-      notice(`Uzupełnij dane dla: ${resolved.missing.join(", ")}.`);
-      return;
-    }
-    const sent = command.channel === "LOCAL"
-      ? await sendLocalChatMessage(resolved.content)
-      : sendViaGameConsole(resolved.content);
-    if (!sent) {
-      notice("Nie udało się wysłać polecenia.");
-      return;
-    }
-    await recordCommand(command.label, resolved.content, command.channel, player.nick);
-    notice(`Wysłano polecenie „${command.label}” do ${player.nick}.`);
   }
 
   function nativeMenuPlayer(playerId, playerNick) {
@@ -2873,7 +2587,7 @@
       #${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-command{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 8px;width:100%;text-align:left}#${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-command strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-command span{color:#68ded9;font-size:9px;text-transform:uppercase}#${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-command small{grid-column:1/-1;overflow:hidden;color:#8ea5b5;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
       #${SCRIPT_ID}-ready-commands-dialog .mc-ready-dialog-empty{padding:10px;border:1px solid #29465b;background:#07131d;color:#8ea5b5}#${SCRIPT_ID}-ready-commands-dialog footer{display:flex;justify-content:flex-end;margin-top:10px}
       #${SCRIPT_ID}-active-panel{position:fixed;inset:0;z-index:2147483001;overflow:visible!important;pointer-events:none;color:#dce8f2;font:12px Arial,sans-serif}
-      #${SCRIPT_ID}-active-panel *{box-sizing:border-box}#${SCRIPT_ID}-active-panel .mc-active-window{position:absolute;left:calc(50% - 360px);top:24px;bottom:auto!important;display:block;width:min(720px,calc(100vw - 24px));height:auto!important;min-height:0!important;max-height:calc(100vh - 48px)!important;max-block-size:calc(100vh - 48px)!important;overflow-x:hidden!important;overflow-y:auto!important;padding:8px;border:1px solid #2b465c;border-radius:5px;background:rgba(8,18,28,.97);box-shadow:0 14px 42px #000d;pointer-events:auto;scrollbar-width:thin;scrollbar-color:#35556d #07131d}
+      #${SCRIPT_ID}-active-panel *{box-sizing:border-box}#${SCRIPT_ID}-active-panel .mc-active-window{position:absolute;left:calc(50% - 430px);top:24px;bottom:auto!important;display:block;width:min(860px,calc(100vw - 24px));height:auto!important;min-height:0!important;max-height:calc(100vh - 48px)!important;max-block-size:calc(100vh - 48px)!important;overflow-x:hidden!important;overflow-y:auto!important;padding:8px;border:1px solid #2b465c;border-radius:5px;background:rgba(8,18,28,.97);box-shadow:0 14px 42px #000d;pointer-events:auto;scrollbar-width:thin;scrollbar-color:#35556d #07131d}
       #${SCRIPT_ID}-active-panel [data-active-panel-body],#${SCRIPT_ID}-active-panel .mc-participants,#${SCRIPT_ID}-active-panel .mc-map-players,#${SCRIPT_ID}-active-panel .mc-participant-session{position:static;height:auto!important;min-height:0!important;max-height:none!important;max-block-size:none!important;overflow:visible!important}
       #${SCRIPT_ID}-active-panel .mc-active-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding-bottom:9px;border-bottom:1px solid #29445a;cursor:move;user-select:none;touch-action:none}
       #${SCRIPT_ID}-active-panel .mc-active-head small,#${SCRIPT_ID}-active-panel h3,#${SCRIPT_ID}-active-panel h4{color:#68ded9}#${SCRIPT_ID}-active-panel h3{margin:3px 0 0;font-size:18px}#${SCRIPT_ID}-active-panel .mc-active-head button{border:0;background:none;color:#dce8f2;font-size:18px;cursor:pointer}
@@ -2976,5 +2690,5 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  console.info("[Centrum Moderacji] v3.3.42 gotowe .");
+  console.info("[Centrum Moderacji] v3.3.48 gotowe .");
 })();
