@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.33
+// @version      3.3.40
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.3.33";
+  window[RUNTIME_GUARD] = "3.3.40";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -658,6 +658,9 @@
     overlay.querySelector("[data-search]").addEventListener("keydown", event => {
       if (event.key === "Enter") selectFromSearch();
     });
+    if (state.accountSearchId) {
+      overlay.querySelector("[data-search]").value = state.accountSearchId;
+    }
     overlay.querySelector("[data-clear-player]").addEventListener("click", () => {
       selectPlayers([]);
       state.accountCharacters = [];
@@ -1931,7 +1934,7 @@
     const code = generateCode();
     if (state.panel) state.panel.querySelector("[data-code]").value = code;
     const map = currentMap();
-    const accountId = player?.accountId || resolvePlayerAccountId(nick, player?.id);
+    const accountId = getPlayerAccountId(player?.id);
     const config = readStartConfig();
     const values = { nick, moderator, kod: code, czas: "", powod: "", tresc: "" };
     const local = resolveTemplate(config.local, values);
@@ -1965,6 +1968,7 @@
       if (state.panel) renderActiveSections();
       localStorage.setItem(ACTIVE_PANEL_OPEN_KEY, "1");
       showActivePanel();
+      await detectPlayerAccountCharacters(player);
       notice(`Rozpoczęto weryfikację gracza ${nick}. Kod: ${code}.`);
     } catch (error) {
       if (error.message === "ACTIVE_VERIFICATION_EXISTS") {
@@ -1984,7 +1988,7 @@
       return notice("Ten gracz jest już w aktywnej weryfikacji.");
     }
     const map = currentMap();
-    const accountId = player?.accountId || resolvePlayerAccountId(nick, player?.id);
+    const accountId = getPlayerAccountId(player?.id);
     const moderator = getCurrentCharacterNick();
     const code = generateCode();
     const config = readStartConfig();
@@ -2034,11 +2038,36 @@
       }
       selectPlayers([{ nick, id: player.id || "" }]);
       renderActiveSections();
+      await detectPlayerAccountCharacters(player);
       notice(`Dodano ${nick} do aktywnej weryfikacji. Kod gracza: ${code}.`);
     } catch (error) {
       const label = error.message === "PARTICIPANT_ALREADY_ADDED" ? "Ten gracz jest już w aktywnej weryfikacji." : error.message;
       notice(`Nie udało się dodać gracza (${label}).`);
     }
+  }
+
+  async function detectPlayerAccountCharacters(player) {
+    const currentPlayer = nativeMenuPlayer(player?.id, player?.nick || player?.name);
+    const nick = normalize(currentPlayer.nick || player?.nick || player?.name);
+    const characterId = currentPlayer.id || player?.id || null;
+    const accountId = profileAccountId(getPlayerAccountId(characterId));
+    if (!accountId) {
+      notice(`Nie udało się odczytać ID konta gracza ${nick || "—"} bezpośrednio z danych klienta.`);
+      return false;
+    }
+    if (!state.panel) showPanel();
+    const input = state.panel?.querySelector("[data-search]");
+    const panelWindow = state.panel?.querySelector(".mc-window");
+    if (!input) {
+      notice("Nie udało się otworzyć wyszukiwarki konta.");
+      return false;
+    }
+    input.value = accountId;
+    state.accountSearchId = accountId;
+    panelWindow?.scrollTo({ top: 0, behavior: "smooth" });
+    await detectAccountCharacters(accountId);
+    state.panel?.querySelector("[data-search-results]")?.scrollIntoView({ block: "nearest" });
+    return true;
   }
 
   async function openParticipantAccountSearch(participantId) {
@@ -2050,22 +2079,10 @@
       notice("Nie znaleziono uczestnika aktywnej weryfikacji.");
       return;
     }
-    const accountId = profileAccountId(participant.account_id);
-    if (!accountId) {
-      notice(`Sesja gracza ${participant.character_name} nie zawiera zapisanego ID konta. Funkcja będzie dostępna dla nowo rozpoczętych sesji.`);
-      return;
-    }
-    if (!state.panel) showPanel();
-    const input = state.panel?.querySelector("[data-search]");
-    const panelWindow = state.panel?.querySelector(".mc-window");
-    if (!input) {
-      notice("Nie udało się otworzyć wyszukiwarki konta.");
-      return;
-    }
-    input.value = accountId;
-    panelWindow?.scrollTo({ top: 0, behavior: "smooth" });
-    await detectAccountCharacters(accountId);
-    state.panel?.querySelector("[data-search-results]")?.scrollIntoView({ block: "nearest" });
+    await detectPlayerAccountCharacters({
+      nick: participant.character_name,
+      id: participant.character_id
+    });
   }
 
   async function sendNewVerificationCode(participantId) {
@@ -2336,7 +2353,12 @@
     for (const [action, label] of PLAYER_MENU_SHORTCUTS) {
       if (menu.some(entry => Array.isArray(entry) && normalize(entry[0]) === label)) continue;
       menu.push([label, () => {
-        const currentPlayer = nativeMenuPlayer(player.id, player.nick);
+        const refreshedPlayer = nativeMenuPlayer(player.id, player.nick);
+        const currentPlayer = {
+          ...player,
+          ...refreshedPlayer,
+          accountId: refreshedPlayer.accountId || player.accountId || null
+        };
         if (!currentPlayer.nick) {
           notice("Nie udało się odczytać danych wybranej postaci.");
           return;
@@ -2350,7 +2372,12 @@
     if (menu.some(entry => Array.isArray(entry) && normalize(entry[0]) === label)) return;
 
     menu.push([label, () => {
-      const currentPlayer = nativeMenuPlayer(player.id, player.nick);
+      const refreshedPlayer = nativeMenuPlayer(player.id, player.nick);
+      const currentPlayer = {
+        ...player,
+        ...refreshedPlayer,
+        accountId: refreshedPlayer.accountId || player.accountId || null
+      };
       if (!currentPlayer.nick) {
         notice("Nie udało się odczytać danych wybranej postaci.");
         return;
@@ -2475,17 +2502,26 @@
   function nativeMenuPlayer(playerId, playerNick) {
     const id = String(playerId ?? "");
     const nick = normalize(playerNick);
+    const others = getEngine()?.others;
+    const collection = typeof others?.check === "function" ? others.check() : null;
+    const other = id
+      ? (typeof others?.getById === "function" ? others.getById(id) : null) || collection?.[id] || null
+      : null;
     const visiblePlayer = readPlayersOnCurrentMap().find(player =>
       (id && String(player.id) === id) ||
       (nick && sameNick(player.nick, nick))
     );
-    const resolvedNick = normalize(visiblePlayer?.nick || nick);
+    const resolvedNick = normalize(
+      visiblePlayer?.nick ||
+      (typeof other?.getNick === "function" ? other.getNick() : other?.d?.nick) ||
+      nick
+    );
     return {
       nick: isLikelyPlayerNick(resolvedNick) ? resolvedNick : "",
-      id: visiblePlayer?.id || id || null,
-      accountId: visiblePlayer?.accountId || null,
-      x: visiblePlayer?.x ?? null,
-      y: visiblePlayer?.y ?? null
+      id: visiblePlayer?.id || (typeof other?.getId === "function" ? other.getId() : other?.d?.id) || id || null,
+      accountId: getPlayerAccountId(id),
+      x: visiblePlayer?.x ?? other?.d?.x ?? null,
+      y: visiblePlayer?.y ?? other?.d?.y ?? null
     };
   }
 
@@ -2545,26 +2581,45 @@
     return player?.id || null;
   }
 
-  function resolvePlayerAccountId(nick, characterId = null) {
-    const player = readPlayersOnCurrentMap().find(item =>
-      (characterId && String(item.id) === String(characterId)) ||
-      sameNick(item.nick, nick)
+  function getPlayerAccountId(characterId) {
+    const page = getPageWindow();
+    const player = page.Engine?.others?.getById?.(Number(characterId));
+    const accountId = Number(
+      player?.getAccountId?.() ?? player?.d?.account
     );
-    return player?.accountId || null;
+    return Number.isSafeInteger(accountId) && accountId > 0
+      ? accountId
+      : null;
   }
 
   function readAccountId(data, source = null) {
     const candidates = [
+      typeof source?.getAccountId === "function" ? source.getAccountId() : null,
       data?.account_id,
       data?.accountId,
       data?.profile_id,
       data?.profileId,
       data?.aid,
       data?.account,
+      data?.account?.id,
+      data?.account?.account_id,
+      data?.profile?.id,
+      data?.profile?.account_id,
       source?.account_id,
       source?.accountId,
       source?.profile_id,
-      source?.profileId
+      source?.profileId,
+      source?.account?.id,
+      source?.account?.account_id,
+      source?.profile?.id,
+      source?.profile?.account_id,
+      source?.d?.account_id,
+      source?.d?.accountId,
+      source?.d?.profile_id,
+      source?.d?.profileId,
+      source?.d?.aid,
+      source?.d?.account?.id,
+      source?.d?.profile?.id
     ];
     const value = candidates.find(candidate => /^\d{3,12}$/.test(String(candidate ?? "")));
     return value == null ? null : String(value);
@@ -2609,7 +2664,7 @@
 
   function getEngine() {
     const page = getPageWindow();
-    return page.Engine || (typeof page.getEngine === "function" ? page.getEngine() : null);
+    return (typeof page.getEngine === "function" ? page.getEngine() : null) || page.Engine || null;
   }
 
   function getModeratorRankLabel() {
