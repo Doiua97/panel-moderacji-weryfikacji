@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.50
+// @version      3.3.51
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -448,8 +448,7 @@
         click();
       });
     }
-    // Blokowanie pozycji PPM dotyczy wyłącznie ikony uruchamiającej.
-    // Okno Centrum pozostaje zawsze przesuwalne za górną belkę.
+   
     if (element.id && onLockChange) {
       element.addEventListener("contextmenu", event => {
         if (!event.target.closest(`#${element.id}`)) return;
@@ -925,9 +924,7 @@
           "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.7",
           "Cache-Control": "no-cache"
         },
-        // Publiczny profil musi być pobierany bez sesji osoby korzystającej
-        // z panelu. W przeciwnym razie Margonem może dołączyć do dokumentu
-        // przełącznik jej własnych postaci, który nie należy do szukanego konta.
+       
         anonymous: true,
         timeout: 15000,
         onload: response => {
@@ -967,9 +964,7 @@
       );
     };
 
-    // Aktualny publiczny profil Margonem udostępnia postacie jako .char-row.
-    // Klasy legacy pozostają dla zgodności, ale nie skanujemy już dowolnych
-    // elementów data-character-id z nawigacji zalogowanego użytkownika.
+   
     for (const container of documentProfile.querySelectorAll(".char-row, .charc, .charcs")) {
       const name = normalize(
         container.dataset.nick ||
@@ -1751,8 +1746,7 @@
         await recordCommand("ROZPOCZĘCIE — UPOMNIENIE", consoleCommand.content, "CONSOLE", nick);
       }
       selectPlayers([{ nick, id: player.id || resolvePlayerId(nick) || "" }]);
-      // Otwarte Centrum Moderacji pozostaje widoczne. Użytkownik może pracować
-      // równolegle w głównym panelu oraz w kompaktowym oknie aktywnej sesji.
+     
       if (state.panel) renderActiveSections();
       localStorage.setItem(ACTIVE_PANEL_OPEN_KEY, "1");
       showActivePanel();
