@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
-// @version      3.3.52
+// @version      3.3.53
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
 // @author       Doiua
 // @match        https://*.margonem.pl/*
@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.3.52";
+  window[RUNTIME_GUARD] = "3.3.53";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -795,19 +795,27 @@
     const text = String(value || "").trim();
     if (/^\d{3,12}$/.test(text)) return text;
     const profileMatch = text.match(/profile\/view,(\d{3,12})/i);
-    if (profileMatch) return profileMatch[1];
-    const legacyMatch = text.match(/[?&](?:id|user_id)=(\d{3,12})(?:&|$)/i);
-    return legacyMatch ? legacyMatch[1] : "";
+    return profileMatch ? profileMatch[1] : "";
   }
 
   function parseAccountIds(value) {
+    const text = String(value || "").trim();
+    if (!/[\s;]/.test(text)) {
+      const accountId = parseAccountId(text);
+      if (accountId) return [accountId];
+    }
     const seen = new Set();
     const accountIds = [];
-    for (const entry of String(value || "").split(/[\s,;]+/)) {
+    for (const entry of text.split(/[\s;]+/)) {
       const accountId = parseAccountId(entry);
-      if (!accountId || seen.has(accountId)) continue;
-      seen.add(accountId);
-      accountIds.push(accountId);
+      const candidates = accountId
+        ? [accountId]
+        : entry.split(",").filter(Boolean).map(parseAccountId);
+      for (const candidate of candidates) {
+        if (!candidate || seen.has(candidate)) continue;
+        seen.add(candidate);
+        accountIds.push(candidate);
+      }
     }
     return accountIds;
   }
@@ -978,11 +986,13 @@
     target.innerHTML = `
       ${state.accountGroups.map(group => {
         const expanded = openIds.has(group.accountId);
+        const highestNick = normalize(group.characters[0]?.name);
         return `
         <section class="mc-account-group" data-account-group data-account-id="${escapeAttribute(group.accountId)}">
           <div class="mc-account-group-head">
             <button type="button" data-toggle-account aria-expanded="${expanded}" aria-label="${expanded ? "Zwiń" : "Rozwiń"} konto">${expanded ? "▾" : "▸"}</button>
             <span>Konto ${escapeMarkup(group.accountId)}</span>
+            ${highestNick ? `<span class="mc-account-group-nick">${escapeMarkup(highestNick)}</span>` : ""}
             <button type="button" data-remove-account="${escapeAttribute(group.accountId)}" aria-label="Usuń konto">×</button>
           </div>
           <div class="mc-account-character-list" ${expanded ? "" : "hidden"}>
@@ -2590,7 +2600,8 @@
       #${SCRIPT_ID}-panel .mc-search-results{display:grid;margin-top:6px;border:1px solid #4c4023}
       #${SCRIPT_ID}-panel .mc-account-group{display:grid;border-bottom:1px solid #4c4023}
       #${SCRIPT_ID}-panel .mc-account-group-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 7px;font-size:10px;line-height:1.35}
-      #${SCRIPT_ID}-panel .mc-account-group-head span{flex:1}
+      #${SCRIPT_ID}-panel .mc-account-group-head>span:first-of-type{flex:0 0 auto}
+      #${SCRIPT_ID}-panel .mc-account-group-nick{flex:1;min-width:0;overflow:hidden;text-align:right;text-overflow:ellipsis;white-space:nowrap}
       #${SCRIPT_ID}-panel .mc-account-group-head button{min-width:23px;padding:2px 6px}
       #${SCRIPT_ID}-panel .mc-account-character{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:8px;padding:6px 7px;border-bottom:1px solid #4c4023;cursor:pointer}
       #${SCRIPT_ID}-panel .mc-search{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px}
@@ -2678,5 +2689,5 @@
     delete game.page()[RUNTIME_GUARD];
   }
 
-  console.info("[Centrum Moderacji] v3.3.52 gotowe.");
+  console.info("[Centrum Moderacji] v3.3.53 gotowe.");
 })();
