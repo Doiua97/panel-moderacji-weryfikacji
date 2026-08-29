@@ -28,7 +28,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "3.3.50";
+  window[RUNTIME_GUARD] = "3.3.51";
 
   const SCRIPT_ID = "margo-moderation-center";
   const LOCAL_DATABASE_KEY = `${SCRIPT_ID}:local-database:v1`;
@@ -2634,5 +2634,5 @@
     return Math.min(maximum, Math.max(minimum, value));
   }
 
-  console.info("[Centrum Moderacji] v3.3.50 gotowe .");
+  console.info("[Centrum Moderacji] v3.3.51 gotowe .");
 })();
