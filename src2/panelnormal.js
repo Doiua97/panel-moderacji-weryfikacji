@@ -2429,5 +2429,5 @@
     delete game.page()[RUNTIME_GUARD];
   }
 
-  console.info("[Centrum Moderacji] v3.4.9 gotowe.");
+  console.info(`[Centrum Moderacji] v${version} gotowe.`);
 })();
