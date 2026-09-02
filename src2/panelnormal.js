@@ -3,7 +3,7 @@
 
   const RUNTIME_GUARD = "__MARGO_MODERATION_CENTER_RUNTIME__";
   if (window[RUNTIME_GUARD]) return;
-  window[RUNTIME_GUARD] = "version;
+  window[RUNTIME_GUARD] = version;
 
   const SCRIPT_ID = "margo-moderation-center";
   const DB_KEY = `${SCRIPT_ID}:local-database:v1`;
