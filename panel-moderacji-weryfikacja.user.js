@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Margonem — Centrum Moderacji 
+// @name         Margonem — Centrum Moderacji
 // @namespace    https://github.com/Doiua97/panel-moderacji-weryfikacji
 // @version      3.3.54
 // @description  Lokalne centrum moderacji i dokumentowania weryfikacji w Margonem.
@@ -26,35 +26,33 @@
 // ==/UserScript==
 
 (async () => {
-  const base = "https://raw.githubusercontent.com/Doiua97//panel-moderacji-weryfikacji/main/src2";
+  const base = "https://raw.githubusercontent.com/Doiua97/panel-moderacji-weryfikacji/main/src2";
   const version = GM_info.script.version;
 
-  const get = file => new Promise((resolve, reject) =>
+  const get = file => new Promise((resolve, reject) => {
     GM_xmlhttpRequest({
       method: "GET",
       url: `${base}/${file}?v=${version}`,
       onload: r => r.status >= 200 && r.status < 400
         ? resolve(r.responseText)
         : reject(new Error(`HTTP ${r.status}`)),
-      onerror: () => reject(new Error("Błąd połączenia"))
-    })
-  );
+      onerror: reject
+    });
+  });
 
   try {
     const style = document.createElement("style");
     style.id = "margo-moderation-center-styles";
-    style.textContent = await get("panel.css");
+    style.textContent = await get("panelnormal.css");
     document.head.appendChild(style);
 
-    const js = await get("panel.js");
-    new Function(
-      "GM_xmlhttpRequest",
-      "unsafeWindow",
-      "version",
-      js
-    )(GM_xmlhttpRequest, unsafeWindow, version);
+    const js = await get("panelnormal.js");
+    new Function("GM_xmlhttpRequest", "unsafeWindow", "version", js)(
+      GM_xmlhttpRequest,
+      unsafeWindow,
+      version
+    );
   } catch (error) {
-    document.getElementById("margo-moderation-center-styles")?.remove();
     console.error("[Centrum Moderacji]", error);
   }
 })();
